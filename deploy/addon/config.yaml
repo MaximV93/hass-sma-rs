@@ -1,0 +1,39 @@
+---
+name: hass-sma-rs
+version: 0.1.0
+slug: hass-sma-rs
+description: SMA Sunny Boy BT daemon (Rust rewrite)
+stage: experimental
+arch:
+  - amd64
+  - aarch64
+init: false
+host_network: true
+host_dbus: true
+services:
+  - mqtt:want
+options:
+  mqtt:
+    host: core-mosquitto
+    port: 1883
+  inverters: []
+  rfcomm_timeout: 15s
+schema:
+  mqtt:
+    host: "str"
+    port: "int(1,65535)?"
+    user: "str?"
+    password: "password?"
+    client_id: "str?"
+    discovery_prefix: "str?"
+    state_prefix: "str?"
+  inverters:
+    - slot: "str"
+      bt_address: "str"
+      password: "password"
+      poll_interval: "str?"
+      model: "str?"
+      firmware: "str?"
+      mis_enabled: "bool?"
+  local_bt_address: "str?"
+  rfcomm_timeout: "str?"

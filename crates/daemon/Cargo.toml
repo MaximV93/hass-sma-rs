@@ -3,7 +3,7 @@ name = "hass-sma-daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Daemon binary wiring all crates. Implementation staged V5.1+."
+description = "Main daemon. Loads config, drives per-inverter sessions, publishes MQTT."
 
 [[bin]]
 name = "hass-sma-daemon"
@@ -20,3 +20,8 @@ tokio.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive"] }
+humantime-serde = "1"
