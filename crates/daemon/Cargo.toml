@@ -26,3 +26,4 @@ serde_json.workspace = true
 clap = { version = "4", features = ["derive"] }
 humantime-serde = "1"
 prometheus-client = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }

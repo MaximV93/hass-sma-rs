@@ -8,8 +8,10 @@ use clap::Parser;
 use config::{DaemonConfig, InverterCfg};
 use inverter_client::session::{Session, SessionConfig};
 use inverter_client::values::{
-    parse_energy_production, parse_grid_frequency, parse_inverter_temperature,
-    parse_spot_ac_total_power,
+    parse_device_status, parse_energy_production, parse_grid_frequency, parse_grid_relay,
+    parse_inverter_temperature, parse_operation_time, parse_software_version, parse_spot_ac_power,
+    parse_spot_ac_total_power, parse_spot_ac_voltage, parse_spot_dc_power, parse_spot_dc_voltage,
+    status_text,
 };
 use mqtt_discovery::{DeviceKind, DiscoveryPublisher, InverterIdentity, MqttClientConfig};
 use sma_bt_protocol::{auth::UserGroup, commands::QueryKind};
@@ -27,6 +29,135 @@ struct Cli {
     /// Path to config YAML.
     #[arg(short, long, default_value = "/data/options.yaml")]
     config: PathBuf,
+}
+
+/// Dispatch a query reply to the right parser + MQTT publish path.
+///
+/// Each `QueryKind` maps to 0..N sensor keys. Silent-skip arms are queries
+/// whose output we don't publish yet (e.g. archive-only data).
+async fn publish_query_result(
+    kind: QueryKind,
+    body: &[u8],
+    publisher: &DiscoveryPublisher,
+    identity: &InverterIdentity,
+    metrics: &MetricsRegistry,
+    lbl: &InverterLabels,
+) {
+    match kind {
+        QueryKind::SpotAcTotalPower => {
+            let r = parse_spot_ac_total_power(body);
+            if let Some(w) = r.pac_total_w {
+                metrics.ac_power_watts.get_or_create(lbl).set(w as f64);
+                let _ = publisher.publish_value(identity, "ac_power", w).await;
+            }
+        }
+        QueryKind::SpotAcPower => {
+            let r = parse_spot_ac_power(body);
+            if let Some(w) = r.pac1_w {
+                let _ = publisher.publish_value(identity, "ac_power_l1", w).await;
+            }
+            if let Some(w) = r.pac2_w {
+                let _ = publisher.publish_value(identity, "ac_power_l2", w).await;
+            }
+            if let Some(w) = r.pac3_w {
+                let _ = publisher.publish_value(identity, "ac_power_l3", w).await;
+            }
+        }
+        QueryKind::SpotAcVoltage => {
+            let r = parse_spot_ac_voltage(body);
+            if let Some(v) = r.uac1_v {
+                let _ = publisher.publish_value(identity, "ac_voltage_l1", format!("{:.2}", v)).await;
+            }
+            if let Some(v) = r.uac2_v {
+                let _ = publisher.publish_value(identity, "ac_voltage_l2", format!("{:.2}", v)).await;
+            }
+            if let Some(v) = r.uac3_v {
+                let _ = publisher.publish_value(identity, "ac_voltage_l3", format!("{:.2}", v)).await;
+            }
+            if let Some(a) = r.iac1_a {
+                let _ = publisher.publish_value(identity, "ac_current_l1", format!("{:.3}", a)).await;
+            }
+            if let Some(a) = r.iac2_a {
+                let _ = publisher.publish_value(identity, "ac_current_l2", format!("{:.3}", a)).await;
+            }
+            if let Some(a) = r.iac3_a {
+                let _ = publisher.publish_value(identity, "ac_current_l3", format!("{:.3}", a)).await;
+            }
+        }
+        QueryKind::SpotDcPower => {
+            let r = parse_spot_dc_power(body);
+            if let Some(w) = r.pdc1_w {
+                let _ = publisher.publish_value(identity, "dc_power_s1", w).await;
+            }
+            if let Some(w) = r.pdc2_w {
+                let _ = publisher.publish_value(identity, "dc_power_s2", w).await;
+            }
+        }
+        QueryKind::SpotDcVoltage => {
+            let r = parse_spot_dc_voltage(body);
+            if let Some(v) = r.udc1_v {
+                let _ = publisher.publish_value(identity, "dc_voltage_s1", format!("{:.2}", v)).await;
+            }
+            if let Some(v) = r.udc2_v {
+                let _ = publisher.publish_value(identity, "dc_voltage_s2", format!("{:.2}", v)).await;
+            }
+            if let Some(a) = r.idc1_a {
+                let _ = publisher.publish_value(identity, "dc_current_s1", format!("{:.3}", a)).await;
+            }
+            if let Some(a) = r.idc2_a {
+                let _ = publisher.publish_value(identity, "dc_current_s2", format!("{:.3}", a)).await;
+            }
+        }
+        QueryKind::EnergyProduction => {
+            let (day, total) = parse_energy_production(body);
+            if let Some(wh) = day {
+                let _ = publisher
+                    .publish_value(identity, "energy_today", format!("{:.3}", wh as f64 / 1000.0))
+                    .await;
+            }
+            if let Some(wh) = total {
+                let _ = publisher
+                    .publish_value(identity, "energy_lifetime", format!("{:.3}", wh as f64 / 1000.0))
+                    .await;
+            }
+        }
+        QueryKind::OperationTime => {
+            let r = parse_operation_time(body);
+            if let Some(s) = r.total_op_time_s {
+                let _ = publisher
+                    .publish_value(identity, "operation_time", format!("{:.2}", s as f64 / 3600.0))
+                    .await;
+            }
+            if let Some(s) = r.feed_in_time_s {
+                let _ = publisher
+                    .publish_value(identity, "feed_in_time", format!("{:.2}", s as f64 / 3600.0))
+                    .await;
+            }
+        }
+        QueryKind::InverterTemperature => {
+            if let Some(c) = parse_inverter_temperature(body) {
+                let _ = publisher.publish_value(identity, "temperature", format!("{:.2}", c)).await;
+            }
+        }
+        QueryKind::SpotGridFrequency => {
+            if let Some(hz) = parse_grid_frequency(body) {
+                let _ = publisher.publish_value(identity, "grid_frequency", format!("{:.2}", hz)).await;
+            }
+        }
+        QueryKind::DeviceStatus => {
+            if let Some(tag) = parse_device_status(body) {
+                let _ = publisher.publish_value(identity, "status", status_text(tag)).await;
+            }
+        }
+        QueryKind::GridRelayStatus => {
+            if let Some(closed) = parse_grid_relay(body) {
+                let _ = publisher
+                    .publish_value(identity, "grid_relay", if closed { "closed" } else { "open" })
+                    .await;
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Per-inverter task: connect, logon, poll until SIGTERM.
@@ -97,74 +228,42 @@ async fn run_inverter(
         }
 
         // Poll loop: each tick sweeps multiple QueryKinds through the same
-        // persistent BT session (matches the fork's SBFspot sweep, but
-        // without re-opening BT per metric).
-        let queries = [
+        // persistent BT session. Queries grouped: identity (one-shot),
+        // per-tick measurements (AC/DC/energy/temp/freq), diagnostics.
+        //
+        // Identity queries (firmware, type, status) are run ONCE after
+        // logon + whenever the session reconnects, not every tick.
+        let per_tick_queries = [
             QueryKind::SpotAcTotalPower,
+            QueryKind::SpotAcPower,
+            QueryKind::SpotAcVoltage,
+            QueryKind::SpotDcPower,
+            QueryKind::SpotDcVoltage,
             QueryKind::EnergyProduction,
+            QueryKind::OperationTime,
             QueryKind::InverterTemperature,
             QueryKind::SpotGridFrequency,
+            QueryKind::DeviceStatus,
+            QueryKind::GridRelayStatus,
         ];
+
+        // One-shot identity queries after logon.
+        if let Ok(body) = session.query(QueryKind::SoftwareVersion).await {
+            if let Some(ver) = parse_software_version(&body) {
+                let _ = publisher.publish_value(&identity, "firmware_version", &ver).await;
+                identity.firmware = ver;
+            }
+        }
+
         let mut ticker = tokio::time::interval(inv_cfg.poll_interval);
         loop {
             ticker.tick().await;
             metrics.polls_total.get_or_create(&lbl).inc();
             let mut cycle_ok = true;
-            for kind in queries.iter() {
+
+            for kind in per_tick_queries.iter() {
                 match session.query(*kind).await {
-                    Ok(body) => match kind {
-                        QueryKind::SpotAcTotalPower => {
-                            let r = parse_spot_ac_total_power(&body);
-                            if let Some(w) = r.pac_total_w {
-                                metrics.ac_power_watts.get_or_create(&lbl).set(w as f64);
-                                let _ = publisher.publish_value(&identity, "ac_power", w).await;
-                            }
-                        }
-                        QueryKind::EnergyProduction => {
-                            let (day, total) = parse_energy_production(&body);
-                            if let Some(wh) = day {
-                                let _ = publisher
-                                    .publish_value(
-                                        &identity,
-                                        "energy_today",
-                                        format!("{:.3}", wh as f64 / 1000.0),
-                                    )
-                                    .await;
-                            }
-                            if let Some(wh) = total {
-                                let _ = publisher
-                                    .publish_value(
-                                        &identity,
-                                        "energy_lifetime",
-                                        format!("{:.3}", wh as f64 / 1000.0),
-                                    )
-                                    .await;
-                            }
-                        }
-                        QueryKind::InverterTemperature => {
-                            if let Some(c) = parse_inverter_temperature(&body) {
-                                let _ = publisher
-                                    .publish_value(
-                                        &identity,
-                                        "temperature",
-                                        format!("{:.2}", c),
-                                    )
-                                    .await;
-                            }
-                        }
-                        QueryKind::SpotGridFrequency => {
-                            if let Some(hz) = parse_grid_frequency(&body) {
-                                let _ = publisher
-                                    .publish_value(
-                                        &identity,
-                                        "grid_frequency",
-                                        format!("{:.2}", hz),
-                                    )
-                                    .await;
-                            }
-                        }
-                        _ => {}
-                    },
+                    Ok(body) => publish_query_result(*kind, &body, &publisher, &identity, &metrics, &lbl).await,
                     Err(e) => {
                         metrics.poll_errors_total.get_or_create(&lbl).inc();
                         warn!(
@@ -176,7 +275,11 @@ async fn run_inverter(
                     }
                 }
             }
+
+            // Publish last-poll timestamp on success (ISO 8601).
             if cycle_ok {
+                let now = chrono::Utc::now().to_rfc3339();
+                let _ = publisher.publish_value(&identity, "last_poll", &now).await;
                 let _ = publisher.publish_value(&identity, "status", "ok").await;
             } else {
                 let _ = publisher.publish_value(&identity, "status", "error").await;

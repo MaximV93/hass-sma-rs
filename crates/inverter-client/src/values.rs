@@ -30,15 +30,43 @@
 use byteorder::{ByteOrder, LittleEndian};
 
 /// LRI constants (from SBFspot `Types.h`).
+///
+/// Extraction: `lri = code & 0x00FF_FF00` (middle 16 bits shifted left by 8).
+/// The low byte is `cls` (channel/class), high byte is `dataType`.
 pub mod lri {
+    // --- Identity / device info (28-byte records, value at [16..20]) ---
+    pub const INV_STATUS: u32 = 0x0021_4800; // OperationHealth (code index)
+    pub const INV_GRID_RELAY: u32 = 0x0041_6400; // OperationGriSwStt
+    pub const INV_TYPE: u32 = 0x0082_1E00; // Device model
+    pub const INV_CLASS: u32 = 0x0082_2A00; // Device class
+    pub const SW_VERSION: u32 = 0x0082_3400; // Firmware version packed u32
+
+    // --- Temperature (28-byte records, value × 100) ---
+    pub const INV_TEMPERATURE: u32 = 0x0023_7700; // CoolsysTmpNom
+
+    // --- DC side (28-byte records) ---
+    pub const DC_MS_WATT: u32 = 0x0025_1E00; // SPOT_PDC1/2 (cls byte = string id)
+    pub const DC_MS_VOL: u32 = 0x0045_1F00; // SPOT_UDC1/2 (value × 100 → V)
+    pub const DC_MS_AMP: u32 = 0x0045_2100; // SPOT_IDC1/2 (value × 1000 → A)
+
+    // --- Energy counters (16-byte records, u64 at [8..16]) ---
     pub const SPOT_E_TOTAL: u32 = 0x0026_0100; // MeteringTotWhOut — lifetime Wh
     pub const SPOT_E_TODAY: u32 = 0x0026_2200; // MeteringDyWhOut — today Wh
+    pub const SPOT_OPER_TM: u32 = 0x0046_2E00; // MeteringTotOpTms — operating time (s)
+    pub const SPOT_FEED_TM: u32 = 0x0046_2F00; // MeteringTotFeedTms — feed-in time (s)
+
+    // --- AC side (28-byte records) ---
     pub const SPOT_PAC_TOTAL: u32 = 0x0026_3F00; // GridMsTotW — total AC W
-    pub const INV_TEMPERATURE: u32 = 0x0023_7700; // CoolsysTmpNom — °C × 100
+    pub const GRID_MS_W_PHS_A: u32 = 0x0046_4000; // SPOT_PAC1 — L1 W
+    pub const GRID_MS_W_PHS_B: u32 = 0x0046_4100; // SPOT_PAC2 — L2 W
+    pub const GRID_MS_W_PHS_C: u32 = 0x0046_4200; // SPOT_PAC3 — L3 W
+    pub const GRID_MS_VPHS_A: u32 = 0x0046_4800; // SPOT_UAC1 — L1 V × 100
+    pub const GRID_MS_VPHS_B: u32 = 0x0046_4900; // SPOT_UAC2
+    pub const GRID_MS_VPHS_C: u32 = 0x0046_4A00; // SPOT_UAC3
+    pub const GRID_MS_APHS_A: u32 = 0x0046_5000; // SPOT_IAC1 — L1 A × 1000
+    pub const GRID_MS_APHS_B: u32 = 0x0046_5100; // SPOT_IAC2
+    pub const GRID_MS_APHS_C: u32 = 0x0046_5200; // SPOT_IAC3
     pub const GRID_FREQUENCY: u32 = 0x0046_5700; // GridMsHz — Hz × 100
-    pub const INV_STATUS: u32 = 0x0021_4800; // Operation status code
-    pub const SW_VERSION: u32 = 0x0082_3400; // Firmware version u32
-    pub const TYPE_LABEL: u32 = 0x0082_1E00; // Device type u32 index
 }
 
 /// Structured readings from a SpotAcTotalPower query.
@@ -204,6 +232,182 @@ pub fn parse_type_label_raw(body: &[u8]) -> Option<u32> {
         }
     });
     out
+}
+
+/// Per-phase AC readings. All values are Option because inverters may only
+/// populate L1 (single-phase) or leave unused phases as NaN.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AcPerPhase {
+    pub pac1_w: Option<i32>,
+    pub pac2_w: Option<i32>,
+    pub pac3_w: Option<i32>,
+    pub timestamp: Option<u32>,
+}
+
+/// Parse a SpotAcPower reply (PAC1/2/3).
+pub fn parse_spot_ac_power(body: &[u8]) -> AcPerPhase {
+    let mut out = AcPerPhase::default();
+    for_each_28_record(body, |lri, dt, rec| match lri {
+        lri::GRID_MS_W_PHS_A => {
+            out.pac1_w = i32_value_28(rec);
+            out.timestamp = Some(dt);
+        }
+        lri::GRID_MS_W_PHS_B => out.pac2_w = i32_value_28(rec),
+        lri::GRID_MS_W_PHS_C => out.pac3_w = i32_value_28(rec),
+        _ => {}
+    });
+    out
+}
+
+/// Per-phase grid voltage (V) and current (A). SMA encodes both in the same
+/// query reply (SpotAcVoltage).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AcVoltageCurrent {
+    pub uac1_v: Option<f32>,
+    pub uac2_v: Option<f32>,
+    pub uac3_v: Option<f32>,
+    pub iac1_a: Option<f32>,
+    pub iac2_a: Option<f32>,
+    pub iac3_a: Option<f32>,
+}
+
+/// Parse a SpotAcVoltage reply. Voltage raw value is × 100 → V, current is
+/// × 1000 → A.
+pub fn parse_spot_ac_voltage(body: &[u8]) -> AcVoltageCurrent {
+    let mut out = AcVoltageCurrent::default();
+    for_each_28_record(body, |lri, _dt, rec| {
+        match lri {
+            lri::GRID_MS_VPHS_A => out.uac1_v = i32_value_28(rec).map(|v| v as f32 / 100.0),
+            lri::GRID_MS_VPHS_B => out.uac2_v = i32_value_28(rec).map(|v| v as f32 / 100.0),
+            lri::GRID_MS_VPHS_C => out.uac3_v = i32_value_28(rec).map(|v| v as f32 / 100.0),
+            lri::GRID_MS_APHS_A => out.iac1_a = i32_value_28(rec).map(|v| v as f32 / 1000.0),
+            lri::GRID_MS_APHS_B => out.iac2_a = i32_value_28(rec).map(|v| v as f32 / 1000.0),
+            lri::GRID_MS_APHS_C => out.iac3_a = i32_value_28(rec).map(|v| v as f32 / 1000.0),
+            _ => {}
+        }
+    });
+    out
+}
+
+/// Per-string DC readings.
+///
+/// SMA encodes up to two strings in the reply. The `cls` byte (low byte of
+/// the record's `code` word) identifies the string: `cls=1` → string 1,
+/// `cls=2` → string 2. Same LRI for both → we dispatch on cls.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DcPerString {
+    pub pdc1_w: Option<i32>,
+    pub pdc2_w: Option<i32>,
+    pub udc1_v: Option<f32>,
+    pub udc2_v: Option<f32>,
+    pub idc1_a: Option<f32>,
+    pub idc2_a: Option<f32>,
+}
+
+/// Parse an SpotDcPower reply — P string 1/2.
+pub fn parse_spot_dc_power(body: &[u8]) -> DcPerString {
+    parse_dc_block(body)
+}
+
+/// Parse an SpotDcVoltage reply — U/I string 1/2.
+pub fn parse_spot_dc_voltage(body: &[u8]) -> DcPerString {
+    parse_dc_block(body)
+}
+
+fn parse_dc_block(body: &[u8]) -> DcPerString {
+    let mut out = DcPerString::default();
+    let region = records_region(body);
+    let stride = 28;
+    let mut i = 0;
+    while i + stride <= region.len() {
+        let rec = &region[i..i + stride];
+        let code = LittleEndian::read_u32(&rec[0..4]);
+        let lri = record_lri(code);
+        let cls = (code & 0xFF) as u8;
+        match (lri, cls) {
+            (lri::DC_MS_WATT, 1) => out.pdc1_w = i32_value_28(rec),
+            (lri::DC_MS_WATT, 2) => out.pdc2_w = i32_value_28(rec),
+            (lri::DC_MS_VOL, 1) => out.udc1_v = i32_value_28(rec).map(|v| v as f32 / 100.0),
+            (lri::DC_MS_VOL, 2) => out.udc2_v = i32_value_28(rec).map(|v| v as f32 / 100.0),
+            (lri::DC_MS_AMP, 1) => out.idc1_a = i32_value_28(rec).map(|v| v as f32 / 1000.0),
+            (lri::DC_MS_AMP, 2) => out.idc2_a = i32_value_28(rec).map(|v| v as f32 / 1000.0),
+            _ => {}
+        }
+        i += stride;
+    }
+    out
+}
+
+/// Operating-time counters (seconds).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OperationTime {
+    pub total_op_time_s: Option<u64>,
+    pub feed_in_time_s: Option<u64>,
+}
+
+/// Parse the OperationTime reply (two u64 counters).
+pub fn parse_operation_time(body: &[u8]) -> OperationTime {
+    let mut out = OperationTime::default();
+    for_each_16_record(body, |lri, _dt, rec| match lri {
+        lri::SPOT_OPER_TM => out.total_op_time_s = u64_value_16(rec),
+        lri::SPOT_FEED_TM => out.feed_in_time_s = u64_value_16(rec),
+        _ => {}
+    });
+    out
+}
+
+/// Parse a DeviceStatus reply — the operation-health tag/code index.
+///
+/// SBFspot decodes this via a SUSyID-specific tag table (see
+/// `SBFspot.cpp:tagdefs`). For now we return the raw code so the caller
+/// can map it. Common values: 307 = "OK", 455 = "Warning", 35 = "Error".
+pub fn parse_device_status(body: &[u8]) -> Option<u32> {
+    let mut out = None;
+    for_each_28_record(body, |lri, _dt, rec| {
+        if lri == lri::INV_STATUS {
+            // DeviceStatus records encode the status tag at offset [8..12]
+            // in a "status selector" format. SBFspot reads 4 bytes then
+            // picks the first non-zero slot. Simplified: read at offset 8.
+            if rec.len() >= 12 {
+                let v = LittleEndian::read_u32(&rec[8..12]);
+                if v != 0 && v != U32_NAN {
+                    out = Some(v & 0x00FF_FFFF); // low 24 bits = tag id
+                }
+            }
+        }
+    });
+    out
+}
+
+/// Parse a GridRelayStatus reply. Returns true if relay is closed (feeding
+/// grid), false if open. The underlying code values: 51 = closed, 311 = open.
+pub fn parse_grid_relay(body: &[u8]) -> Option<bool> {
+    let mut out = None;
+    for_each_28_record(body, |lri, _dt, rec| {
+        if lri == lri::INV_GRID_RELAY && rec.len() >= 12 {
+            let code = LittleEndian::read_u32(&rec[8..12]) & 0x00FF_FFFF;
+            out = match code {
+                51 => Some(true),
+                311 => Some(false),
+                _ => None,
+            };
+        }
+    });
+    out
+}
+
+/// Map SMA inverter status tag id → human text. Subset of the SBFspot
+/// TagList most likely to appear for an SB HF-30.
+pub fn status_text(tag: u32) -> &'static str {
+    match tag {
+        307 => "Ok",
+        455 => "Warning",
+        35 => "Error",
+        303 => "Off",
+        443 => "Closed",
+        1266 => "Rated current warning",
+        _ => "Unknown",
+    }
 }
 
 /// Parse a SoftwareVersion reply: packed `(release, major, minor, build)` u32.
