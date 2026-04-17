@@ -7,4 +7,4 @@ pub mod session;
 pub mod values;
 
 pub use session::{Session, SessionConfig, SessionError, SessionState};
-pub use values::{parse_spot_ac_total_power, InverterReadings, ReadingLri};
+pub use values::{parse_spot_ac_total_power, InverterReadings};

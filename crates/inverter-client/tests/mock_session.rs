@@ -92,13 +92,22 @@ fn fake_query_reply(local: [u8; 6], dest: [u8; 6], pkt_id: u16) -> Vec<u8> {
         pkt_id,
     };
 
-    // One 28-byte record: LRI 0x0026_3F00 at [0..4] → PAC total, value 1234.
+    // Real reply shape: 12-byte opcode/LRI echo prefix, then 28-byte record.
+    // Record code = 0x00_26_3F_01 (class 0x01 in low byte, LRI 0x00263F00 in
+    // middle). Value at [16..20] — NOT [8..12] (those are min/max slots).
+    let mut cmd_body = Vec::with_capacity(40);
+    cmd_body.extend_from_slice(&[0u8; 12]); // prefix
     let mut rec = [0u8; 28];
-    rec[0..4].copy_from_slice(&0x0026_3F00u32.to_le_bytes());
+    rec[0..4].copy_from_slice(&0x0026_3F01u32.to_le_bytes());
     rec[4..8].copy_from_slice(&0x1234_5678u32.to_le_bytes());
-    rec[8..12].copy_from_slice(&1234i32.to_le_bytes());
+    rec[8..12].copy_from_slice(&i32::MIN.to_le_bytes()); // NaN slot
+    rec[12..16].copy_from_slice(&i32::MIN.to_le_bytes());
+    rec[16..20].copy_from_slice(&1234i32.to_le_bytes()); // the real value
+    rec[20..24].copy_from_slice(&i32::MIN.to_le_bytes());
+    rec[24..28].copy_from_slice(&i32::MIN.to_le_bytes());
+    cmd_body.extend_from_slice(&rec);
 
-    let l2 = encode_l2(&hdr, &rec);
+    let l2 = encode_l2(&hdr, &cmd_body);
     let mut b = FrameBuilder::new(local, dest, 0x0001);
     b.extend(&l2);
     b.build()
