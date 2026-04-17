@@ -3,9 +3,13 @@
 mod config;
 
 use anyhow::{Context, Result};
+use bluez_transport::{rfcomm::parse_bt_mac, RfcommTransport};
 use clap::Parser;
 use config::{DaemonConfig, InverterCfg};
+use inverter_client::session::{Session, SessionConfig};
+use inverter_client::values::parse_spot_ac_total_power;
 use mqtt_discovery::{DeviceKind, DiscoveryPublisher, InverterIdentity, MqttClientConfig};
+use sma_bt_protocol::{auth::UserGroup, commands::QueryKind};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::signal;
@@ -27,35 +31,89 @@ fn init_tracing() {
         .init();
 }
 
-async fn poll_loop_stub(inv_cfg: InverterCfg, publisher: DiscoveryPublisher) -> Result<()> {
-    let identity = InverterIdentity {
+/// Per-inverter task: connect, logon, poll until SIGTERM.
+async fn run_inverter(
+    inv_cfg: InverterCfg,
+    local_bt: Option<[u8; 6]>,
+    publisher: DiscoveryPublisher,
+    rfcomm_timeout: Duration,
+) -> Result<()> {
+    let inverter_bt = parse_bt_mac(&inv_cfg.bt_address)
+        .with_context(|| format!("invalid BT address: {}", inv_cfg.bt_address))?;
+
+    // Initial identity uses config-supplied model/firmware strings; once
+    // we've completed logon + a TypeLabel/SoftwareVersion query, the
+    // identity is refreshed with inverter-reported values.
+    let mut identity = InverterIdentity {
         slot: inv_cfg.slot.clone(),
-        serial: 0, // learned during logon — placeholder for now
+        serial: 0,
         model: inv_cfg.model.clone(),
         firmware: inv_cfg.firmware.clone(),
         kind: DeviceKind::SolarInverter,
     };
 
-    // Announce discovery configs.
-    publisher
-        .announce(&identity)
-        .await
-        .context("MQTT discovery announce")?;
-    info!(slot = %inv_cfg.slot, "announced sensors (placeholder identity)");
-
-    // Stub poll loop: on a real build this would drive
-    // `inverter_client::Session` against the RFCOMM transport. We keep the
-    // structural shape so the daemon compiles + runs even without BT.
-    let mut ticker = tokio::time::interval(inv_cfg.poll_interval);
+    // Retry connect on failure with exponential backoff capped at 60 s.
+    let mut backoff = Duration::from_secs(2);
     loop {
-        ticker.tick().await;
-        // Emit a heartbeat status until the real poll path lands.
-        if let Err(e) = publisher
-            .publish_value(&identity, "status", "scaffold")
-            .await
-        {
-            warn!(slot = %inv_cfg.slot, error = %e, "publish failed");
+        info!(slot = %inv_cfg.slot, "RFCOMM connect attempt");
+        let transport = match RfcommTransport::connect(inverter_bt, local_bt).await {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(slot = %inv_cfg.slot, error = %e, "connect failed");
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(60));
+                continue;
+            }
+        };
+        backoff = Duration::from_secs(2);
+
+        let cfg = SessionConfig {
+            inverter_bt,
+            local_bt: local_bt.unwrap_or([0; 6]),
+            password: inv_cfg.password.clone(),
+            user_group: UserGroup::User,
+            timeout_ms: rfcomm_timeout.as_millis() as u64,
+            mis_enabled: inv_cfg.mis_enabled,
+        };
+        let mut session = Session::new(transport, cfg);
+
+        if let Err(e) = session.handshake_and_logon().await {
+            error!(slot = %inv_cfg.slot, error = %e, "handshake/logon failed");
+            let _ = session.close().await;
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_secs(60));
+            continue;
         }
+
+        // Refresh identity with real inverter serial.
+        identity.serial = session.inverter_serial;
+        if let Err(e) = publisher.announce(&identity).await {
+            warn!(slot = %inv_cfg.slot, error = %e, "discovery announce failed");
+        } else {
+            info!(slot = %inv_cfg.slot, serial = identity.serial, "announced");
+        }
+
+        // Poll loop.
+        let mut ticker = tokio::time::interval(inv_cfg.poll_interval);
+        loop {
+            ticker.tick().await;
+            match session.query(QueryKind::SpotAcTotalPower).await {
+                Ok(body) => {
+                    let r = parse_spot_ac_total_power(&body);
+                    if let Some(w) = r.pac_total_w {
+                        let _ = publisher.publish_value(&identity, "ac_power", w).await;
+                    }
+                    let _ = publisher.publish_value(&identity, "status", "ok").await;
+                }
+                Err(e) => {
+                    warn!(slot = %inv_cfg.slot, error = %e, "query failed — reconnecting");
+                    let _ = publisher.publish_value(&identity, "status", "error").await;
+                    break; // inner loop → reconnect
+                }
+            }
+        }
+        let _ = session.close().await;
+        // Outer loop iterates: reconnect.
     }
 }
 
@@ -73,7 +131,12 @@ async fn main() -> Result<()> {
         "daemon config loaded"
     );
 
-    let mqtt_cfg = MqttClientConfig {
+    let local_bt = cfg
+        .local_bt_address
+        .as_deref()
+        .and_then(parse_bt_mac);
+
+    let mqtt_base = MqttClientConfig {
         host: cfg.mqtt.host.clone(),
         port: cfg.mqtt.port,
         user: cfg.mqtt.user.clone(),
@@ -83,32 +146,20 @@ async fn main() -> Result<()> {
         discovery_prefix: cfg.mqtt.discovery_prefix.clone(),
         state_prefix: cfg.mqtt.state_prefix.clone(),
     };
-    let publisher = DiscoveryPublisher::connect(mqtt_cfg).await;
 
-    // Spawn a poll loop per inverter. Each loop owns its Transport + Session.
     let mut tasks = Vec::new();
     for inv in cfg.inverters.iter() {
         let inv_clone = inv.clone();
-        // Clone publisher channel — ordering on single broker is fine.
-        let publisher_clone = DiscoveryPublisher::connect(MqttClientConfig {
-            host: cfg.mqtt.host.clone(),
-            port: cfg.mqtt.port,
-            user: cfg.mqtt.user.clone(),
-            password: cfg.mqtt.password.clone(),
-            client_id: format!("{}-{}", cfg.mqtt.client_id, inv.slot),
-            keep_alive: Duration::from_secs(30),
-            discovery_prefix: cfg.mqtt.discovery_prefix.clone(),
-            state_prefix: cfg.mqtt.state_prefix.clone(),
-        })
-        .await;
+        let mut pub_cfg = mqtt_base.clone();
+        pub_cfg.client_id = format!("{}-{}", mqtt_base.client_id, inv.slot);
+        let publisher = DiscoveryPublisher::connect(pub_cfg).await;
+        let timeout = cfg.rfcomm_timeout;
         tasks.push(tokio::spawn(async move {
-            if let Err(e) = poll_loop_stub(inv_clone, publisher_clone).await {
-                error!(error = %e, "inverter task exited");
+            if let Err(e) = run_inverter(inv_clone, local_bt, publisher, timeout).await {
+                error!(error = %e, "inverter task exited with error");
             }
         }));
     }
-    // Use the first publisher to satisfy the compiler (we split channels).
-    drop(publisher);
 
     info!("running {} inverter tasks; Ctrl+C to stop", tasks.len());
     signal::ctrl_c().await?;
