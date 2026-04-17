@@ -3,8 +3,17 @@ name = "inverter-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "placeholder"
+description = "Per-inverter session state machine: handshake, logon, query. Transport-agnostic."
 
 [dependencies]
-thiserror.workspace = true
+sma-bt-protocol = { path = "../sma-bt-protocol" }
+bluez-transport = { path = "../bluez-transport" }
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
 tracing.workspace = true
+thiserror.workspace = true
+async-trait = "0.1"
+byteorder.workspace = true
+rand = "0.8"
+
+[dev-dependencies]
+tokio.workspace = true
