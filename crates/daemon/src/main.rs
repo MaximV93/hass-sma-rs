@@ -185,21 +185,55 @@ async fn run_inverter(
         kind: DeviceKind::SolarInverter,
     };
 
-    // Retry connect on failure with exponential backoff capped at 60 s.
-    let mut backoff = Duration::from_secs(2);
+    // Adaptive connect backoff. SMA inverters power off their BT radio
+    // ~1h after sunset. Once we detect "Host is down" we likely face a
+    // long sleep window — short backoff would burn BT bandwidth for
+    // hours. Separate backoff ladders for transient vs persistent failures.
+    const MIN_BACKOFF: Duration = Duration::from_secs(2);
+    const MAX_TRANSIENT_BACKOFF: Duration = Duration::from_secs(60);
+    const SLEEP_BACKOFF: Duration = Duration::from_secs(600); // 10 min when inverter asleep
+
+    let mut backoff = MIN_BACKOFF;
+    let mut host_down_streak: u32 = 0;
+    let mut published_offline = false;
     loop {
         info!(slot = %inv_cfg.slot, "RFCOMM connect attempt");
         metrics.bt_reconnects_total.get_or_create(&lbl).inc();
         let transport = match RfcommTransport::connect(inverter_bt, local_bt).await {
-            Ok(t) => t,
+            Ok(t) => {
+                host_down_streak = 0;
+                t
+            }
             Err(e) => {
-                warn!(slot = %inv_cfg.slot, error = %e, "connect failed");
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(Duration::from_secs(60));
+                let err_str = e.to_string();
+                if err_str.contains("Host is down") || err_str.contains("os error 112") {
+                    host_down_streak += 1;
+                    if host_down_streak == 3 && !published_offline {
+                        // After 3 host-down failures, mark availability offline
+                        // and switch to the long backoff.
+                        let _ = publisher.publish_offline(&identity).await;
+                        published_offline = true;
+                        info!(
+                            slot = %inv_cfg.slot,
+                            "inverter appears asleep — extending reconnect to {}s",
+                            SLEEP_BACKOFF.as_secs()
+                        );
+                    }
+                }
+                warn!(slot = %inv_cfg.slot, error = %e, streak = host_down_streak, "connect failed");
+                let wait = if host_down_streak >= 3 {
+                    SLEEP_BACKOFF
+                } else {
+                    backoff
+                };
+                tokio::time::sleep(wait).await;
+                if host_down_streak < 3 {
+                    backoff = (backoff * 2).min(MAX_TRANSIENT_BACKOFF);
+                }
                 continue;
             }
         };
-        backoff = Duration::from_secs(2);
+        backoff = MIN_BACKOFF;
 
         let cfg = SessionConfig {
             inverter_bt,
@@ -226,6 +260,9 @@ async fn run_inverter(
         } else {
             info!(slot = %inv_cfg.slot, serial = identity.serial, "announced");
         }
+        // Mark this inverter's sensors as available in HA.
+        let _ = publisher.publish_online(&identity).await;
+        published_offline = false;
 
         // Poll loop: each tick sweeps multiple QueryKinds through the same
         // persistent BT session. Queries grouped: identity (one-shot),
@@ -339,7 +376,10 @@ async fn main() -> Result<()> {
         let inv_clone = inv.clone();
         let mut pub_cfg = mqtt_base.clone();
         pub_cfg.client_id = format!("{}-{}", mqtt_base.client_id, inv.slot);
-        let publisher = DiscoveryPublisher::connect(pub_cfg).await;
+        // LWT topic: when this client disconnects uncleanly, broker publishes
+        // "offline" here → HA flips every sensor on this inverter to unavailable.
+        let lwt_topic = format!("{}/{}/availability", pub_cfg.state_prefix, inv.slot);
+        let publisher = DiscoveryPublisher::connect_with_lwt(pub_cfg, Some(lwt_topic)).await;
         let timeout = cfg.rfcomm_timeout;
         let m = metrics.clone();
         tasks.push(tokio::spawn(async move {

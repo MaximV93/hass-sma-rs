@@ -49,14 +49,29 @@ pub struct DiscoveryPublisher {
 
 impl DiscoveryPublisher {
     pub async fn connect(cfg: MqttClientConfig) -> Self {
+        Self::connect_with_lwt(cfg, None).await
+    }
+
+    /// Connect with an optional Last-Will-Testament topic. If provided, the
+    /// broker publishes "offline" (retained) to that topic when this client
+    /// disconnects uncleanly — so HA can show the inverter as unavailable
+    /// rather than showing stale data.
+    pub async fn connect_with_lwt(cfg: MqttClientConfig, lwt_topic: Option<String>) -> Self {
         let mut opts = MqttOptions::new(&cfg.client_id, &cfg.host, cfg.port);
         opts.set_keep_alive(cfg.keep_alive);
         if let (Some(u), Some(p)) = (cfg.user.as_ref(), cfg.password.as_ref()) {
             opts.set_credentials(u, p);
         }
+        if let Some(topic) = lwt_topic.as_ref() {
+            opts.set_last_will(rumqttc::LastWill::new(
+                topic,
+                "offline",
+                QoS::AtLeastOnce,
+                true,
+            ));
+        }
         let (client, mut event_loop) = AsyncClient::new(opts, 64);
 
-        // Drive the event loop in the background so messages actually flow.
         tokio::spawn(async move {
             loop {
                 match event_loop.poll().await {
@@ -70,6 +85,33 @@ impl DiscoveryPublisher {
         });
 
         Self { client, cfg }
+    }
+
+    /// Topic for the daemon-level availability signal. HA-discovered
+    /// sensors can reference this via `availability_topic` so they flip
+    /// to "unavailable" when the daemon goes offline.
+    pub fn availability_topic(&self, inv: &InverterIdentity) -> String {
+        format!("{}/{}/availability", self.cfg.state_prefix, inv.slot)
+    }
+
+    /// Publish "online" to the availability topic. Call right after connect
+    /// + after each successful handshake.
+    pub async fn publish_online(&self, inv: &InverterIdentity) -> Result<(), PublisherError> {
+        let topic = self.availability_topic(inv);
+        self.client
+            .publish(topic, QoS::AtLeastOnce, true, b"online".to_vec())
+            .await?;
+        Ok(())
+    }
+
+    /// Publish "offline" — manually, on graceful shutdown, or when we
+    /// know the inverter went to sleep and repeated reconnects will fail.
+    pub async fn publish_offline(&self, inv: &InverterIdentity) -> Result<(), PublisherError> {
+        let topic = self.availability_topic(inv);
+        self.client
+            .publish(topic, QoS::AtLeastOnce, true, b"offline".to_vec())
+            .await?;
+        Ok(())
     }
 
     fn discovery_topic(&self, inv: &InverterIdentity, sensor: &SensorConfig) -> String {
@@ -91,17 +133,21 @@ impl DiscoveryPublisher {
             let state_topic = self.state_topic(inv, s);
             let unique_id = format!("sbfspot_{}_{}_{}", inv.slot, inv.serial, s.key);
             let object_id = format!("sbfspot_{}_{}", inv.slot, s.key);
+            let availability_topic = self.availability_topic(inv);
             let mut payload = json!({
                 "name": s.name,
                 "unique_id": unique_id,
                 "object_id": object_id,
                 "has_entity_name": true,
                 "state_topic": state_topic,
+                "availability_topic": availability_topic,
+                "payload_available": "online",
+                "payload_not_available": "offline",
                 "icon": s.icon,
                 "device": {
                     "identifiers": [format!("sbfspot_{}", inv.serial)],
                     "name": format!("SBFspot {}", inv.slot),
-                    "manufacturer": "SMA (powerslider fork)",
+                    "manufacturer": "SMA (hass-sma-rs)",
                     "model": inv.model,
                     "sw_version": inv.firmware,
                 },
