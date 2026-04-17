@@ -36,12 +36,18 @@
 //!
 //! Byte stuffing (XOR 0x20 after 0x7D) applies to: 0x7D, 0x7E, 0x11, 0x12, 0x13.
 
+pub mod auth;
+pub mod commands;
 pub mod constants;
 pub mod fcs;
 pub mod frame;
+pub mod packet;
 
+pub use auth::{build_logon_body, encode_password, UserGroup};
+pub use commands::{build_query_body, QueryKind};
 pub use constants::*;
 pub use frame::{Frame, FrameBuilder, ParseError};
+pub use packet::{decode_l2, encode_l2, L2Header};
 
 /// Byte values that require stuffing when sent inside a byte-stuffed payload.
 pub const STUFF_BYTES: &[u8] = &[0x7D, 0x7E, 0x11, 0x12, 0x13];
