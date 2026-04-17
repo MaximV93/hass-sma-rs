@@ -329,6 +329,11 @@ impl<T: Transport> Session<T> {
                 return Err(SessionError::Protocol { phase: "query-l2" });
             }
         };
+        let hex_body: String = data
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<Vec<_>>()
+            .join(" ");
         debug!(
             ?kind,
             reply_susy = hdr.app_susy_id,
@@ -336,6 +341,7 @@ impl<T: Transport> Session<T> {
             reply_pkt_id = hdr.pkt_id,
             reply_retcode = hdr.error_code,
             body_len = data.len(),
+            body = %hex_body,
             "query reply"
         );
         Ok(data.to_vec())
