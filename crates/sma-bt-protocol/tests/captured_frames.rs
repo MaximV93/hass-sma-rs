@@ -5,7 +5,7 @@
 //! real captures land (via `scripts/parse-sbfspot-hexdump.py`) the test
 //! automatically gains coverage.
 
-use sma_bt_protocol::{parse_l2_only_blob, Frame};
+use sma_bt_protocol::{parse_l2_only_blob, Frame, FrameBuilder, FrameKind};
 use std::fs;
 use std::path::PathBuf;
 
@@ -106,4 +106,33 @@ fn all_captured_frames_parse() {
     }
     // Make sure we actually saw something.
     assert!(l1_ok > 0 || l2_only > 0, "no fixture frames classified");
+}
+
+/// Contract test: verify our FrameBuilder produces the exact same bytes
+/// SBFspot emits for the canonical "ver\r\n" discovery packet (first
+/// outbound frame in any handshake).
+///
+/// Expected byte layout (from real inverter capture, fixture 0000-send.hex):
+///
+///     7e 17 00 69  00 00 00 00 00 00  01 00 00 00 00 00  01 02
+///     |  |  |  |   └ local_bt (zeros)┘└── dest_bt ─────┘└ ctrl ┘
+///     |  |  └──── hdr_cks = 0x7E ^ 0x17 ^ 0x00
+///     |  └─── total frame length (little-endian), 0x0017 = 23
+///     └── frame start delimiter
+///
+///     76 65 72 0d 0a       = "ver\r\n"
+///
+/// No FCS, no trailing 0x7E — that's the L1-only signature.
+#[test]
+fn frame_builder_matches_captured_discovery_packet() {
+    let local_bt: [u8; 6] = [0; 6];
+    let dest_bt: [u8; 6] = [1, 0, 0, 0, 0, 0];
+    let mut b = FrameBuilder::new_with_kind(FrameKind::L1Only, local_bt, dest_bt, 0x0201);
+    b.extend(b"ver\r\n");
+    let wire = b.build();
+
+    let fixture = hex_line_to_bytes(
+        "7e 17 00 69 00 00 00 00 00 00 01 00 00 00 00 00 01 02 76 65 72 0d 0a",
+    );
+    assert_eq!(wire, fixture, "built frame must match captured bytes exactly");
 }
