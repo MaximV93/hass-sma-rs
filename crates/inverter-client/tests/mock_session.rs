@@ -37,9 +37,9 @@ fn fake_topology(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
     b.build()
 }
 
-/// Fake init-reply: L2-wrapped, carries inverter's SUSyID + serial in the
-/// header. Session persists these for query dst.
-fn fake_init_reply(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
+/// Fake init-reply. Session's recv_l2_with_pkt_id matches on the sent
+/// pkt_id, so the reply must echo it.
+fn fake_init_reply(local: [u8; 6], dest: [u8; 6], pkt_id: u16) -> Vec<u8> {
     let hdr = L2Header {
         longwords: 0x09,
         ctrl: 0xA0,
@@ -49,29 +49,28 @@ fn fake_init_reply(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
         app_susy_id: 101,
         app_serial: 2_120_121_246,
         error_code: 0,
-        pkt_id: 0x0001,
+        pkt_id,
     };
-    let body = [0u8; 16]; // arbitrary
+    let body = [0u8; 16];
     let l2 = encode_l2(&hdr, &body);
     let mut b = FrameBuilder::new(local, dest, 0x0001);
     b.extend(&l2);
     b.build()
 }
 
-/// Build a fake successful logon reply. L2 body starts with 2-byte retcode (0 = OK).
-fn fake_logon_reply(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
+/// Fake successful logon reply echoing sent pkt_id.
+fn fake_logon_reply(local: [u8; 6], dest: [u8; 6], pkt_id: u16) -> Vec<u8> {
     let hdr = L2Header {
         longwords: 0x0E,
         ctrl: 0xA0,
         dst_susy_id: APP_SUSY_ID,
         dst_serial: 900_123_456,
         ctrl2: 0x0100,
-        app_susy_id: 101,          // pretend inverter SUSyID
-        app_serial: 2_120_121_246, // pretend inverter serial
-        error_code: 0,             // 0 = logon OK
-        pkt_id: 0x0001,
+        app_susy_id: 101,
+        app_serial: 2_120_121_246,
+        error_code: 0,
+        pkt_id,
     };
-    // Body can be empty for a reply — SBFspot doesn't read it.
     let body = [0u8; 12];
     let l2 = encode_l2(&hdr, &body);
     let mut b = FrameBuilder::new(local, dest, 0x0001);
@@ -79,8 +78,8 @@ fn fake_logon_reply(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
     b.build()
 }
 
-/// Build a fake query reply with one SpotPacTotal record encoding 1234 W.
-fn fake_query_reply(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
+/// Fake query reply with one SpotPacTotal record, echoing sent pkt_id.
+fn fake_query_reply(local: [u8; 6], dest: [u8; 6], pkt_id: u16) -> Vec<u8> {
     let hdr = L2Header {
         longwords: 0x09,
         ctrl: 0xA0,
@@ -90,7 +89,7 @@ fn fake_query_reply(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
         app_susy_id: 101,
         app_serial: 2_120_121_246,
         error_code: 0,
-        pkt_id: 0x0002,
+        pkt_id,
     };
 
     // One 28-byte record: LRI 0x0026_3F00 at [0..4] → PAC total, value 1234.
@@ -114,12 +113,13 @@ async fn full_session_happy_path() {
     // Inverter's pre-scripted replies. Order mirrors the new handshake:
     //   recv hello → send echo → recv topology → send init → recv init_reply
     //   → send logoff → send logon → recv logon_reply → send query → recv query_reply
+    // Session pkt_id sequence: 1=init, 2=logoff, 3=logon, 4=first query.
     mock.queue_replies(vec![
         fake_hello(inverter, local),
         fake_topology(inverter, local),
-        fake_init_reply(inverter, local),
-        fake_logon_reply(inverter, local),
-        fake_query_reply(inverter, local),
+        fake_init_reply(inverter, local, 1),
+        fake_logon_reply(inverter, local, 3),
+        fake_query_reply(inverter, local, 4),
     ]);
 
     let cfg = SessionConfig {
@@ -168,10 +168,9 @@ async fn logon_failure_is_typed() {
     let mock = MockTransport::new();
     mock.queue_reply(fake_hello(inverter, local));
     mock.queue_reply(fake_topology(inverter, local));
-    mock.queue_reply(fake_init_reply(inverter, local));
+    mock.queue_reply(fake_init_reply(inverter, local, 1));
 
-    // Logon reply with retcode 0x0100 (invalid password) — retcode is now
-    // encoded into the L2 header's `error_code` field (wire L2body[22..24]).
+    // Logon reply with retcode 0x0100 — pkt_id must match sent logon (=3).
     let hdr = L2Header {
         longwords: 0x0E,
         ctrl: 0xA0,
@@ -181,7 +180,7 @@ async fn logon_failure_is_typed() {
         app_susy_id: 101,
         app_serial: 2_120_121_246,
         error_code: 0x0100,
-        pkt_id: 0x0001,
+        pkt_id: 3,
     };
     let body = [0u8; 12];
     let l2 = encode_l2(&hdr, &body);

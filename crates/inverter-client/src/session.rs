@@ -34,6 +34,15 @@ pub enum SessionError {
 
 pub type Result<T> = std::result::Result<T, SessionError>;
 
+/// Parsed L2 reply for caller consumption.
+pub struct L2Reply {
+    pub pkt_id: u16,
+    pub error_code: u16,
+    pub app_susy_id: u16,
+    pub app_serial: u32,
+    pub body: Vec<u8>,
+}
+
 /// Static session configuration (per-inverter).
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
@@ -128,6 +137,53 @@ impl<T: Transport> Session<T> {
         Err(SessionError::Silent { phase })
     }
 
+    /// Receive frames until we see an L2-wrapped frame (ctrl=0x0001) whose
+    /// L2 header `pkt_id` matches `want_pkt_id`. SBFspot's getPacket loops
+    /// on pkt_id mismatch so replies to earlier requests (that might still
+    /// be in the receive buffer) get discarded instead of being consumed
+    /// as the reply to the current request.
+    ///
+    /// Returns (raw frame bytes, parsed L2 header, cmd body).
+    async fn recv_l2_with_pkt_id(
+        &mut self,
+        want_pkt_id: u16,
+        phase: &'static str,
+    ) -> Result<(Vec<u8>, crate::session::L2Reply)> {
+        for attempt in 0..16 {
+            let bytes = self.recv_until_l1_ctrl(0x0001, phase).await?;
+            let frame = Frame::parse(&bytes)?;
+            let (hdr, data) = match decode_l2(&frame.payload) {
+                Some(x) => x,
+                None => {
+                    debug!(attempt, phase, "skipping non-L2 ctrl=0x0001 frame");
+                    continue;
+                }
+            };
+            if hdr.pkt_id == want_pkt_id {
+                return Ok((
+                    bytes,
+                    L2Reply {
+                        pkt_id: hdr.pkt_id,
+                        error_code: hdr.error_code,
+                        app_susy_id: hdr.app_susy_id,
+                        app_serial: hdr.app_serial,
+                        body: data.to_vec(),
+                    },
+                ));
+            }
+            debug!(
+                attempt,
+                phase,
+                want_pkt = want_pkt_id,
+                got_pkt = hdr.pkt_id,
+                got_susy = hdr.app_susy_id,
+                got_serial = hdr.app_serial,
+                "skipping L2 reply with non-matching pkt_id"
+            );
+        }
+        Err(SessionError::Silent { phase })
+    }
+
     /// Perform the initial handshake + logon sequence. After this returns
     /// Ok, the session is LoggedIn and ready to accept queries.
     ///
@@ -207,17 +263,9 @@ impl<T: Transport> Session<T> {
         self.transport.send_frame(&init_frame).await?;
         debug!(pkt_id, "init sent");
 
-        let init_reply_bytes = self.recv_until_l1_ctrl(0x0001, "init").await?;
-        let init_reply = Frame::parse(&init_reply_bytes)?;
-        let (init_hdr, _init_cmd) = match decode_l2(&init_reply.payload) {
-            Some(x) => x,
-            None => {
-                dump_bytes("init-reply", &init_reply_bytes, &init_reply);
-                return Err(SessionError::Protocol { phase: "init-l2" });
-            }
-        };
-        self.inverter_susy_id = init_hdr.app_susy_id;
-        self.inverter_serial = init_hdr.app_serial;
+        let (_init_bytes, init_reply) = self.recv_l2_with_pkt_id(pkt_id, "init").await?;
+        self.inverter_susy_id = init_reply.app_susy_id;
+        self.inverter_serial = init_reply.app_serial;
         info!(
             susy_id = self.inverter_susy_id,
             serial = self.inverter_serial,
@@ -249,36 +297,23 @@ impl<T: Transport> Session<T> {
         self.transport.send_frame(&frame_bytes).await?;
         debug!(pkt_id, now_epoch, "sent logon");
 
-        // ── Step 7: recv logon reply (also ctrl=0x0001 at L1)
-        let logon_reply = self.recv_until_l1_ctrl(0x0001, "logon").await?;
-        let logon_frame = Frame::parse(&logon_reply)?;
-        let (hdr, _body) = match decode_l2(&logon_frame.payload) {
-            Some(x) => x,
-            None => {
-                dump_bytes("logon-reply", &logon_reply, &logon_frame);
-                warn!("logon reply not L2 — inverter likely rejected logon shape");
-                return Err(SessionError::Protocol { phase: "logon-l2" });
-            }
-        };
+        // ── Step 7: recv logon reply — match on sent pkt_id
+        let (_logon_bytes, logon_reply) = self.recv_l2_with_pkt_id(pkt_id, "logon").await?;
 
-        // Retcode is in the L2 header's first reserved short (SBFspot calls
-        // this `ErrorCode`, wire position L2body[22..24]). Cmd body starts
-        // AFTER this field and is unused on reply.
-        match hdr.error_code {
+        match logon_reply.error_code {
             0 => {}
             0x0100 => return Err(SessionError::LogonFailed { code: 0x0100 }),
             other => return Err(SessionError::LogonFailed { code: other }),
         }
 
-        // Confirm the reply came from the same inverter we identified in init.
-        // If SUSyID/serial differ, the reply is from a different device and
-        // we should have skipped it — but don't fail, just log.
-        if hdr.app_susy_id != self.inverter_susy_id || hdr.app_serial != self.inverter_serial {
+        if logon_reply.app_susy_id != self.inverter_susy_id
+            || logon_reply.app_serial != self.inverter_serial
+        {
             warn!(
                 init_susy = self.inverter_susy_id,
                 init_serial = self.inverter_serial,
-                logon_susy = hdr.app_susy_id,
-                logon_serial = hdr.app_serial,
+                logon_susy = logon_reply.app_susy_id,
+                logon_serial = logon_reply.app_serial,
                 "logon reply identity mismatch"
             );
         }
@@ -319,32 +354,26 @@ impl<T: Transport> Session<T> {
         self.transport.send_frame(&frame_bytes).await?;
         debug!(?kind, pkt_id, "sent query");
 
-        // Reply is L2 at L1-ctrl=0x0001. Skip any spontaneous L1 frames.
-        let reply = self.recv_until_l1_ctrl(0x0001, "query").await?;
-        let frame = Frame::parse(&reply)?;
-        let (hdr, data) = match decode_l2(&frame.payload) {
-            Some(x) => x,
-            None => {
-                dump_bytes("query-reply", &reply, &frame);
-                return Err(SessionError::Protocol { phase: "query-l2" });
-            }
-        };
-        let hex_body: String = data
+        // Match reply on sent pkt_id (SBFspot's approach). Skips stray
+        // replies from previous requests that may still be in the buffer.
+        let (_bytes, reply) = self.recv_l2_with_pkt_id(pkt_id, "query").await?;
+        let hex_body: String = reply
+            .body
             .iter()
             .map(|b| format!("{:02x}", b))
             .collect::<Vec<_>>()
             .join(" ");
         debug!(
             ?kind,
-            reply_susy = hdr.app_susy_id,
-            reply_serial = hdr.app_serial,
-            reply_pkt_id = hdr.pkt_id,
-            reply_retcode = hdr.error_code,
-            body_len = data.len(),
+            reply_susy = reply.app_susy_id,
+            reply_serial = reply.app_serial,
+            reply_pkt_id = reply.pkt_id,
+            reply_retcode = reply.error_code,
+            body_len = reply.body.len(),
             body = %hex_body,
             "query reply"
         );
-        Ok(data.to_vec())
+        Ok(reply.body)
     }
 
     /// Cleanly close the transport. Safe to call multiple times.
@@ -357,6 +386,7 @@ impl<T: Transport> Session<T> {
 
 /// Error-level hex dump of a raw frame and its parsed payload. Called on
 /// L2 decode failures so the next iteration has byte-level evidence.
+#[allow(dead_code)]
 fn dump_bytes(label: &'static str, raw: &[u8], frame: &Frame) {
     let hex_raw: String = raw
         .iter()
