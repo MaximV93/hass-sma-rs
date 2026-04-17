@@ -3,8 +3,15 @@ name = "storage"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "placeholder"
+description = "TimescaleDB writer for per-poll inverter readings, with optional MariaDB-SpotData migration tool."
 
 [dependencies]
 thiserror.workspace = true
 tracing.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "time", "macros", "chrono"] }
+chrono.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

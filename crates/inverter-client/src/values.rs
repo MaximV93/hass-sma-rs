@@ -104,6 +104,56 @@ pub fn parse_inverter_temperature(body: &[u8]) -> Option<f32> {
     None
 }
 
+/// Parse TypeLabel reply — extracts the inverter type string from record
+/// LRI 0x821E00. SMA encodes the type as a u32 that indexes into TagList;
+/// here we return the raw u32 and let the caller map via its tag table.
+pub fn parse_type_label_raw(body: &[u8]) -> Option<u32> {
+    let stride = 28;
+    for i in (0..body.len()).step_by(stride) {
+        if i + stride > body.len() {
+            break;
+        }
+        let rec = &body[i..i + stride];
+        let lri = LittleEndian::read_u32(&rec[0..4]) & 0x00FF_FFFF;
+        if lri == 0x0082_1E00 || lri == 0x0082_1F00 || lri == 0x0082_2000 {
+            return Some(LittleEndian::read_u32(&rec[8..12]));
+        }
+    }
+    None
+}
+
+/// Parse SoftwareVersion reply — firmware as packed u32 (major, minor,
+/// build, revision). Returns a `"major.minor.build.R{rev}"` string or None.
+pub fn parse_software_version(body: &[u8]) -> Option<String> {
+    let stride = 28;
+    for i in (0..body.len()).step_by(stride) {
+        if i + stride > body.len() {
+            break;
+        }
+        let rec = &body[i..i + stride];
+        let lri = LittleEndian::read_u32(&rec[0..4]) & 0x00FF_FFFF;
+        if lri == 0x0082_3400 {
+            // Packed: [build, minor, major, release_type]
+            let v = LittleEndian::read_u32(&rec[8..12]);
+            let build = (v & 0xFF) as u8;
+            let minor = ((v >> 8) & 0xFF) as u8;
+            let major = ((v >> 16) & 0xFF) as u8;
+            let rel = ((v >> 24) & 0xFF) as u8;
+            let rel_char = match rel {
+                0 => 'N',
+                1 => 'E',
+                2 => 'A',
+                3 => 'B',
+                4 => 'R',
+                5 => 'S',
+                _ => '?',
+            };
+            return Some(format!("{:02}.{:02}.{:02}.{}", major, minor, build, rel_char));
+        }
+    }
+    None
+}
+
 /// Parse GridFrequency reply (Hz).
 pub fn parse_grid_frequency(body: &[u8]) -> Option<f32> {
     let stride = 28;
@@ -180,5 +230,24 @@ mod tests {
         LittleEndian::write_u32(&mut rec[8..12], 4998); // 49.98 Hz
         let f = parse_grid_frequency(&rec).unwrap();
         assert!((f - 49.98).abs() < 0.001);
+    }
+
+    #[test]
+    fn parse_software_version_string() {
+        // Pack firmware v02.30.06.R = rel=4, major=2, minor=30, build=6
+        let packed: u32 = (4 << 24) | (2 << 16) | (30 << 8) | 6;
+        let mut rec = [0u8; 28];
+        LittleEndian::write_u32(&mut rec[0..4], 0x0082_3400);
+        LittleEndian::write_u32(&mut rec[8..12], packed);
+        let v = parse_software_version(&rec).unwrap();
+        assert_eq!(v, "02.30.06.R");
+    }
+
+    #[test]
+    fn parse_type_label_returns_raw_u32() {
+        let mut rec = [0u8; 28];
+        LittleEndian::write_u32(&mut rec[0..4], 0x0082_1E00);
+        LittleEndian::write_u32(&mut rec[8..12], 9321);
+        assert_eq!(parse_type_label_raw(&rec), Some(9321));
     }
 }

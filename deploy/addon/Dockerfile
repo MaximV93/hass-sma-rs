@@ -1,8 +1,9 @@
 # ───── build stage ─────────────────────────────────────────────────────────
-FROM rust:1.81-slim-bookworm AS builder
+# Use rustlang/rust:nightly to stay ahead of stable's MSRV gate (our workspace
+# pins rust 1.75 min but some transitive deps need a recent compiler).
+FROM rust:1-slim-bookworm AS builder
 WORKDIR /build
 
-# Cache deps via a dummy build first.
 COPY Cargo.toml ./
 COPY crates/ crates/
 RUN cargo build --release --bin hass-sma-daemon
