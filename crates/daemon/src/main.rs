@@ -50,7 +50,10 @@ async fn poll_loop_stub(inv_cfg: InverterCfg, publisher: DiscoveryPublisher) -> 
     loop {
         ticker.tick().await;
         // Emit a heartbeat status until the real poll path lands.
-        if let Err(e) = publisher.publish_value(&identity, "status", "scaffold").await {
+        if let Err(e) = publisher
+            .publish_value(&identity, "status", "scaffold")
+            .await
+        {
             warn!(slot = %inv_cfg.slot, error = %e, "publish failed");
         }
     }

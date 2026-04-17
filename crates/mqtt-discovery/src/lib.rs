@@ -11,4 +11,4 @@ pub mod config;
 
 pub use catalog::{sensor_catalog, SensorConfig};
 pub use client::{DiscoveryPublisher, MqttClientConfig, PublisherError};
-pub use config::{InverterIdentity, DeviceKind};
+pub use config::{DeviceKind, InverterIdentity};

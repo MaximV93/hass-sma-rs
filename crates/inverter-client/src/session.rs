@@ -9,7 +9,7 @@ use sma_bt_protocol::{
     APP_SUSY_ID,
 };
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 #[derive(Debug, Error)]
 pub enum SessionError {
@@ -112,9 +112,7 @@ impl<T: Transport> Session<T> {
             .recv_frame(self.cfg.timeout_ms)
             .await
             .map_err(|e| match e {
-                TransportError::Timeout { .. } => {
-                    SessionError::Silent { phase: "hello" }
-                }
+                TransportError::Timeout { .. } => SessionError::Silent { phase: "hello" },
                 other => other.into(),
             })?;
         let hello_frame = Frame::parse(&hello)?;
@@ -142,9 +140,7 @@ impl<T: Transport> Session<T> {
             .recv_frame(self.cfg.timeout_ms)
             .await
             .map_err(|e| match e {
-                TransportError::Timeout { .. } => {
-                    SessionError::Silent { phase: "ver" }
-                }
+                TransportError::Timeout { .. } => SessionError::Silent { phase: "ver" },
                 other => other.into(),
             })?;
         if ver_reply.len() > 19 && ver_reply[19] < 4 {
@@ -183,18 +179,18 @@ impl<T: Transport> Session<T> {
             .recv_frame(self.cfg.timeout_ms)
             .await
             .map_err(|e| match e {
-                TransportError::Timeout { .. } => {
-                    SessionError::Silent { phase: "logon" }
-                }
+                TransportError::Timeout { .. } => SessionError::Silent { phase: "logon" },
                 other => other.into(),
             })?;
         let logon_frame = Frame::parse(&logon_reply)?;
-        let (hdr, body) = decode_l2(&logon_frame.payload)
-            .ok_or(SessionError::Protocol { phase: "logon-l2" })?;
+        let (hdr, body) =
+            decode_l2(&logon_frame.payload).ok_or(SessionError::Protocol { phase: "logon-l2" })?;
 
         // Retcode lives at body[0..2] in the SBFspot wire format.
         if body.len() < 2 {
-            return Err(SessionError::Protocol { phase: "logon-body" });
+            return Err(SessionError::Protocol {
+                phase: "logon-body",
+            });
         }
         let retcode = u16::from_le_bytes([body[0], body[1]]);
         match retcode {
@@ -220,7 +216,9 @@ impl<T: Transport> Session<T> {
     /// (values.rs) because different queries emit different record shapes.
     pub async fn query(&mut self, kind: QueryKind) -> Result<Vec<u8>> {
         if self.state != SessionState::LoggedIn {
-            return Err(SessionError::Protocol { phase: "query-not-logged-in" });
+            return Err(SessionError::Protocol {
+                phase: "query-not-logged-in",
+            });
         }
         let pkt_id = self.next_pcktid();
         let body = build_query_body(
@@ -249,8 +247,8 @@ impl<T: Transport> Session<T> {
                 other => other.into(),
             })?;
         let frame = Frame::parse(&reply)?;
-        let (_hdr, data) = decode_l2(&frame.payload)
-            .ok_or(SessionError::Protocol { phase: "query-l2" })?;
+        let (_hdr, data) =
+            decode_l2(&frame.payload).ok_or(SessionError::Protocol { phase: "query-l2" })?;
         Ok(data.to_vec())
     }
 

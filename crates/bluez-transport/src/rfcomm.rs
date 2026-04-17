@@ -18,9 +18,8 @@
 
 use crate::{framer::FrameReader, Result, Transport, TransportError};
 use async_trait::async_trait;
-use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-use std::os::unix::net::UnixStream;
+use std::io;
+use std::os::fd::RawFd;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task;
@@ -70,25 +69,17 @@ pub struct RfcommTransport {
 impl RfcommTransport {
     /// Connect to `remote_mac` on RFCOMM channel 1. `local_mac` optionally
     /// binds the socket to a specific local HCI adapter before connecting.
-    pub async fn connect(
-        remote_mac: [u8; 6],
-        local_mac: Option<[u8; 6]>,
-    ) -> Result<Self> {
+    pub async fn connect(remote_mac: [u8; 6], local_mac: Option<[u8; 6]>) -> Result<Self> {
         task::spawn_blocking(move || connect_blocking(remote_mac, local_mac))
             .await
             .map_err(|e| TransportError::Io(io::Error::other(e)))?
     }
 }
 
-fn connect_blocking(
-    remote_mac: [u8; 6],
-    local_mac: Option<[u8; 6]>,
-) -> Result<RfcommTransport> {
+fn connect_blocking(remote_mac: [u8; 6], local_mac: Option<[u8; 6]>) -> Result<RfcommTransport> {
     // SAFETY: syscall wrappers. Errors are observed via `errno` / libc's
     // returned -1 convention.
-    let fd = unsafe {
-        libc::socket(AF_BLUETOOTH, libc::SOCK_STREAM, BTPROTO_RFCOMM)
-    };
+    let fd = unsafe { libc::socket(AF_BLUETOOTH, libc::SOCK_STREAM, BTPROTO_RFCOMM) };
     if fd < 0 {
         return Err(TransportError::Io(io::Error::last_os_error()));
     }
@@ -170,14 +161,7 @@ impl Transport for RfcommTransport {
         task::spawn_blocking(move || {
             let guard = fd.lock().unwrap();
             let raw = guard.ok_or(TransportError::Closed)?;
-            let n = unsafe {
-                libc::send(
-                    raw,
-                    buf.as_ptr() as *const libc::c_void,
-                    buf.len(),
-                    0,
-                )
-            };
+            let n = unsafe { libc::send(raw, buf.as_ptr() as *const libc::c_void, buf.len(), 0) };
             if n < 0 {
                 Err(TransportError::Io(io::Error::last_os_error()))
             } else {
@@ -206,14 +190,8 @@ impl Transport for RfcommTransport {
                 let guard = fd.lock().unwrap();
                 let raw = guard.ok_or(TransportError::Closed)?;
                 let mut buf = [0u8; 4096];
-                let n = unsafe {
-                    libc::recv(
-                        raw,
-                        buf.as_mut_ptr() as *mut libc::c_void,
-                        buf.len(),
-                        0,
-                    )
-                };
+                let n =
+                    unsafe { libc::recv(raw, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0) };
                 if n < 0 {
                     Err(TransportError::Io(io::Error::last_os_error()))
                 } else if n == 0 {

@@ -4,7 +4,7 @@
 //! are fabricated to match the byte-layout the protocol crate produces on the
 //! reverse direction.
 
-use bluez_transport::{MockTransport, Transport};
+use bluez_transport::MockTransport;
 use inverter_client::{
     session::{Session, SessionConfig, SessionState},
     values::parse_spot_ac_total_power,
@@ -46,7 +46,7 @@ fn fake_logon_reply(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
         dst_susy_id: APP_SUSY_ID,
         dst_serial: 900_123_456,
         ctrl2: 0x0100,
-        app_susy_id: 101, // pretend inverter SUSyID
+        app_susy_id: 101,          // pretend inverter SUSyID
         app_serial: 2_120_121_246, // pretend inverter serial
         pkt_id: 0x0001,
     };
@@ -129,9 +129,13 @@ async fn full_session_happy_path() {
 
 #[tokio::test]
 async fn logon_failure_is_typed() {
-    use bluez_transport::{MockTransport, Transport};
+    use bluez_transport::MockTransport;
     use inverter_client::session::SessionError;
-    use sma_bt_protocol::{frame::FrameBuilder, packet::{encode_l2, L2Header}, APP_SUSY_ID};
+    use sma_bt_protocol::{
+        frame::FrameBuilder,
+        packet::{encode_l2, L2Header},
+        APP_SUSY_ID,
+    };
 
     let local: [u8; 6] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
     let inverter: [u8; 6] = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];

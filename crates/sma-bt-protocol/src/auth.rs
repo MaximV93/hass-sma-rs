@@ -32,7 +32,7 @@ impl UserGroup {
     /// Encoded as a u32 in the logon body (byte 4 of command body).
     pub const fn code(self) -> u32 {
         match self {
-            UserGroup::User => 0x0000_0007, // UG_USER in SBFspot
+            UserGroup::User => 0x0000_0007,      // UG_USER in SBFspot
             UserGroup::Installer => 0x0000_000A, // UG_INSTALLER
         }
     }

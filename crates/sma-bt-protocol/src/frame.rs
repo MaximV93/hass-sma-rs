@@ -22,9 +22,7 @@ pub enum ParseError {
     #[error("declared length {declared} != actual {actual}")]
     LengthMismatch { declared: u16, actual: usize },
 
-    #[error(
-        "header checksum mismatch: got 0x{got:02X}, expected 0x{expected:02X}"
-    )]
+    #[error("header checksum mismatch: got 0x{got:02X}, expected 0x{expected:02X}")]
     HeaderChecksum { got: u8, expected: u8 },
 
     #[error("unterminated byte-stuffing escape at end of frame")]
@@ -234,7 +232,10 @@ mod tests {
 
     #[test]
     fn empty_frame_too_short() {
-        assert!(matches!(Frame::parse(&[]), Err(ParseError::TooShort { .. })));
+        assert!(matches!(
+            Frame::parse(&[]),
+            Err(ParseError::TooShort { .. })
+        ));
     }
 
     #[test]
@@ -251,7 +252,10 @@ mod tests {
         assert_eq!(parsed.local_bt, local);
         assert_eq!(parsed.dest_bt, dest);
         assert_eq!(parsed.control, 0x0001);
-        assert_eq!(parsed.payload, [0xFF, 0x03, 0x60, 0x65, 0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(
+            parsed.payload,
+            [0xFF, 0x03, 0x60, 0x65, 0x01, 0x02, 0x03, 0x04]
+        );
     }
 
     #[test]

@@ -50,22 +50,22 @@ impl QueryKind {
     pub const fn opcode(self) -> (u32, u32, u32) {
         use QueryKind::*;
         match self {
-            SpotAcTotalPower    => (0x5100_0200, 0x0026_3F00, 0x0026_3FFF),
-            SpotAcPower         => (0x5100_0200, 0x0046_4000, 0x0046_42FF),
-            SpotAcVoltage       => (0x5100_0200, 0x0046_4800, 0x0046_55FF),
-            SpotGridFrequency   => (0x5100_0200, 0x0046_5700, 0x0046_57FF),
-            SpotDcPower         => (0x5380_0200, 0x0025_1E00, 0x0025_1EFF),
-            SpotDcVoltage       => (0x5380_0200, 0x0045_1F00, 0x0045_21FF),
-            EnergyProduction    => (0x5400_0200, 0x0026_0100, 0x0026_22FF),
-            OperationTime       => (0x5400_0200, 0x0046_2E00, 0x0046_2FFF),
+            SpotAcTotalPower => (0x5100_0200, 0x0026_3F00, 0x0026_3FFF),
+            SpotAcPower => (0x5100_0200, 0x0046_4000, 0x0046_42FF),
+            SpotAcVoltage => (0x5100_0200, 0x0046_4800, 0x0046_55FF),
+            SpotGridFrequency => (0x5100_0200, 0x0046_5700, 0x0046_57FF),
+            SpotDcPower => (0x5380_0200, 0x0025_1E00, 0x0025_1EFF),
+            SpotDcVoltage => (0x5380_0200, 0x0045_1F00, 0x0045_21FF),
+            EnergyProduction => (0x5400_0200, 0x0026_0100, 0x0026_22FF),
+            OperationTime => (0x5400_0200, 0x0046_2E00, 0x0046_2FFF),
             InverterTemperature => (0x5200_0200, 0x0023_7700, 0x0023_77FF),
-            DeviceStatus        => (0x5180_0200, 0x0021_4800, 0x0021_48FF),
-            GridRelayStatus     => (0x5180_0200, 0x0041_6400, 0x0041_64FF),
-            TypeLabel           => (0x5800_0200, 0x0082_1E00, 0x0082_20FF),
-            SoftwareVersion     => (0x5800_0200, 0x0082_3400, 0x0082_34FF),
+            DeviceStatus => (0x5180_0200, 0x0021_4800, 0x0021_48FF),
+            GridRelayStatus => (0x5180_0200, 0x0041_6400, 0x0041_64FF),
+            TypeLabel => (0x5800_0200, 0x0082_1E00, 0x0082_20FF),
+            SoftwareVersion => (0x5800_0200, 0x0082_3400, 0x0082_34FF),
             BatteryChargeStatus => (0x5100_0200, 0x0029_5A00, 0x0029_5AFF),
-            BatteryInfo         => (0x5100_0200, 0x0049_1E00, 0x0049_5DFF),
-            MeteringGridTotalW  => (0x5100_0200, 0x0046_3600, 0x0046_3669),
+            BatteryInfo => (0x5100_0200, 0x0049_1E00, 0x0049_5DFF),
+            MeteringGridTotalW => (0x5100_0200, 0x0046_3600, 0x0046_3669),
         }
     }
 }
@@ -103,7 +103,11 @@ mod tests {
     #[test]
     fn query_body_shape() {
         let body = build_query_body(
-            QueryKind::SpotAcTotalPower, 0x0042, 900_000_000, 0x007D, 0xDEAD_BEEF,
+            QueryKind::SpotAcTotalPower,
+            0x0042,
+            900_000_000,
+            0x007D,
+            0xDEAD_BEEF,
         );
         // L2 header is 28 bytes, then 12 bytes of command (3× u32 LE).
         assert_eq!(body.len(), 28 + 12);

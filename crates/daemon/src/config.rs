@@ -70,14 +70,30 @@ pub struct InverterCfg {
     pub mis_enabled: bool,
 }
 
-fn default_mqtt_port() -> u16 { 1883 }
-fn default_client_id() -> String { "hass-sma-rs".into() }
-fn default_discovery_prefix() -> String { "homeassistant".into() }
-fn default_state_prefix() -> String { "hass-sma".into() }
-fn default_rfcomm_timeout() -> Duration { Duration::from_secs(15) }
-fn default_poll() -> Duration { Duration::from_secs(5) }
-fn default_model() -> String { "unknown".into() }
-fn default_firmware() -> String { "unknown".into() }
+fn default_mqtt_port() -> u16 {
+    1883
+}
+fn default_client_id() -> String {
+    "hass-sma-rs".into()
+}
+fn default_discovery_prefix() -> String {
+    "homeassistant".into()
+}
+fn default_state_prefix() -> String {
+    "hass-sma".into()
+}
+fn default_rfcomm_timeout() -> Duration {
+    Duration::from_secs(15)
+}
+fn default_poll() -> Duration {
+    Duration::from_secs(5)
+}
+fn default_model() -> String {
+    "unknown".into()
+}
+fn default_firmware() -> String {
+    "unknown".into()
+}
 
 impl DaemonConfig {
     pub fn from_yaml(src: &str) -> Result<Self, serde_yaml::Error> {

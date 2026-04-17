@@ -90,7 +90,10 @@ mod tests {
         assert_eq!(t.send_frame(&[0x7E, 0x01, 0x7E]).await.unwrap(), 3);
         assert_eq!(t.recv_frame(0).await.unwrap(), vec![0x7E, 0xAA, 0x7E]);
         assert_eq!(t.recv_frame(0).await.unwrap(), vec![0x7E, 0xBB, 0x7E]);
-        assert!(matches!(t.recv_frame(0).await, Err(TransportError::MockExhausted)));
+        assert!(matches!(
+            t.recv_frame(0).await,
+            Err(TransportError::MockExhausted)
+        ));
         assert_eq!(t.sent_frames(), vec![vec![0x7E, 0x01, 0x7E]]);
     }
 
@@ -98,7 +101,10 @@ mod tests {
     async fn close_makes_further_ops_error() {
         let mut t = MockTransport::new();
         t.close().await.unwrap();
-        assert!(matches!(t.send_frame(&[]).await, Err(TransportError::Closed)));
+        assert!(matches!(
+            t.send_frame(&[]).await,
+            Err(TransportError::Closed)
+        ));
         assert!(matches!(t.recv_frame(0).await, Err(TransportError::Closed)));
     }
 }

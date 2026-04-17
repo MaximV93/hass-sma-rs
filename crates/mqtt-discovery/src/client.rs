@@ -142,7 +142,12 @@ impl DiscoveryPublisher {
             .expect("unknown sensor key");
         let topic = self.state_topic(inv, sensor);
         self.client
-            .publish(topic, QoS::AtMostOnce, false, value.to_string().into_bytes())
+            .publish(
+                topic,
+                QoS::AtMostOnce,
+                false,
+                value.to_string().into_bytes(),
+            )
             .await?;
         Ok(())
     }
