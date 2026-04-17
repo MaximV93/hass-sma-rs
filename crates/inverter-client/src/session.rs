@@ -4,7 +4,7 @@ use bluez_transport::{Transport, TransportError};
 use sma_bt_protocol::{
     auth::{build_logon_body, UserGroup},
     commands::{build_query_body, QueryKind},
-    frame::{Frame, FrameBuilder, ParseError},
+    frame::{Frame, FrameBuilder, FrameKind, ParseError},
     packet::decode_l2,
     APP_SUSY_ID,
 };
@@ -122,8 +122,10 @@ impl<T: Transport> Session<T> {
         //    inverter enumerate its NetID and firmware version.
         let pkt_id = self.next_pcktid();
         let ver_payload = b"ver\r\n";
-        // L1-level command frame with a special fixed-version destination:
-        let mut b = FrameBuilder::new(
+        // L1-only discovery packet: no byte-stuffing, no FCS, no trailing 0x7E.
+        // Captured shape matches SBFspot's `writePacketHeader(..., 0x0201, version)`.
+        let mut b = FrameBuilder::new_with_kind(
+            FrameKind::L1Only,
             self.cfg.local_bt,
             [1, 0, 0, 0, 0, 0], // version "1.0.0"
             0x0201,

@@ -1,11 +1,29 @@
 //! Frame encoder + decoder for SMA BT Layer 1.
+//!
+//! Two frame shapes observed on the wire:
+//!
+//! 1. **L1-only** (discovery, network control). Structure:
+//!    ```text
+//!    0x7E | len_lo len_hi | hdr_cks | 6b local_bt | 6b dest_bt | 2b ctrl | payload
+//!    ```
+//!    Total length = 18 + payload. **No byte-stuffing. No FCS. No trailing 0x7E.**
+//!    `len` field counts the entire frame including header.
+//!
+//! 2. **L2-wrapped** (logon, queries, status). Same 18-byte L1 header, then:
+//!    ```text
+//!    <byte-stuffed: L2Signature | L2Header | body | FCS-16 LE> | 0x7E
+//!    ```
+//!    Payload identified by the L2 signature `FF 03 60 65` immediately after the header.
+//!
+//! Detection: after parsing the 18-byte header, peek at the next 4 payload bytes.
+//! If they match `BT_L2_SIGNATURE` → L2 frame; otherwise → L1-only frame.
 
 use crate::{constants::*, fcs::Fcs16, STUFF_BYTES, STUFF_ESCAPE, STUFF_XOR};
+use byteorder::{ByteOrder, LittleEndian};
 use thiserror::Error;
 
-/// Minimum valid frame length: 18 header bytes + 0x7E trailer.
-/// Anything shorter cannot possibly be a valid frame.
-pub const MIN_FRAME_LEN: usize = 18 + 1;
+/// Minimum valid frame length: 18 header bytes (pure L1-only frame with empty payload).
+pub const MIN_FRAME_LEN: usize = 18;
 
 /// Error returned when parsing a raw frame off the wire fails.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -29,26 +47,35 @@ pub enum ParseError {
     TruncatedEscape,
 }
 
+/// Frame shape distinguishing on-wire representation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameKind {
+    /// L1-only: no L2 signature in payload, no byte-stuffing, no FCS, no trailing 0x7E.
+    L1Only,
+    /// L2-wrapped: payload starts with `BT_L2_SIGNATURE`, byte-stuffed, FCS-16 trailer, 0x7E terminator.
+    L2Wrapped,
+}
+
 /// A parsed SMA BT frame.
 ///
 /// `local_bt` and `dest_bt` are stored as they appear on the wire (little-endian
-/// BT address order, i.e. LAP first, NAP last). Convert at the transport layer.
+/// BT address order, i.e. LAP first, NAP last).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
+    pub kind: FrameKind,
     pub local_bt: [u8; 6],
     pub dest_bt: [u8; 6],
     pub control: u16,
-    /// L2 payload AFTER un-stuffing. Includes the SMA L2 signature, headers
-    /// and user command data, but *excludes* the FCS-16 trailer.
+    /// Payload (un-stuffed, FCS stripped for L2). For L1-only frames this is
+    /// the raw command body. For L2 frames this is the L2 signature + body.
     pub payload: Vec<u8>,
 }
 
 impl Frame {
-    /// Parse a single frame from a raw byte buffer.
+    /// Parse one frame from a raw byte buffer.
     ///
-    /// The buffer should contain exactly one complete frame. To handle
-    /// stream reassembly (trailing bytes, incomplete reads), drive this from
-    /// a transport-level framer that tokenises on `0x7E`.
+    /// Accepts both L1-only and L2-wrapped shapes. Detection is based on
+    /// the L2 signature at payload offset 0.
     pub fn parse(raw: &[u8]) -> Result<Self, ParseError> {
         if raw.len() < MIN_FRAME_LEN {
             return Err(ParseError::TooShort {
@@ -58,11 +85,6 @@ impl Frame {
         }
         if raw[0] != FRAME_DELIMITER {
             return Err(ParseError::MissingStart { byte: raw[0] });
-        }
-        if *raw.last().unwrap() != FRAME_DELIMITER {
-            return Err(ParseError::MissingEnd {
-                byte: *raw.last().unwrap(),
-            });
         }
 
         let len_lo = raw[1];
@@ -76,12 +98,6 @@ impl Frame {
                 expected: expected_cks,
             });
         }
-        if declared_len as usize != raw.len() {
-            return Err(ParseError::LengthMismatch {
-                declared: declared_len,
-                actual: raw.len(),
-            });
-        }
 
         let mut local_bt = [0u8; 6];
         local_bt.copy_from_slice(&raw[4..10]);
@@ -89,33 +105,69 @@ impl Frame {
         dest_bt.copy_from_slice(&raw[10..16]);
         let control = u16::from_le_bytes([raw[16], raw[17]]);
 
-        // Everything between header and final 0x7E is the stuffed L2 payload,
-        // with the FCS-16 as the last 2 bytes (after un-stuffing).
-        let stuffed = &raw[18..raw.len() - 1];
-        let unstuffed = unstuff(stuffed)?;
+        // Decide L1 vs L2 based on L2 signature at offset 18.
+        let has_l2_sig = raw.len() >= 22
+            && LittleEndian::read_u32(&raw[18..22]) == BT_L2_SIGNATURE;
 
-        if unstuffed.len() < 2 {
-            return Err(ParseError::TooShort {
-                got: unstuffed.len(),
-                need: 2,
-            });
+        if has_l2_sig {
+            // L2-wrapped. Spec: 18-byte L1 header, then stuffed L2 body +
+            // FCS, then trailing 0x7E.
+            if *raw.last().unwrap() != FRAME_DELIMITER {
+                return Err(ParseError::MissingEnd {
+                    byte: *raw.last().unwrap(),
+                });
+            }
+            if (declared_len as usize) != raw.len() {
+                return Err(ParseError::LengthMismatch {
+                    declared: declared_len,
+                    actual: raw.len(),
+                });
+            }
+            let stuffed = &raw[18..raw.len() - 1];
+            let unstuffed = unstuff(stuffed)?;
+            if unstuffed.len() < 2 {
+                return Err(ParseError::TooShort {
+                    got: unstuffed.len(),
+                    need: 2,
+                });
+            }
+            let (payload, _fcs) = unstuffed.split_at(unstuffed.len() - 2);
+            Ok(Self {
+                kind: FrameKind::L2Wrapped,
+                local_bt,
+                dest_bt,
+                control,
+                payload: payload.to_vec(),
+            })
+        } else {
+            // L1-only: no stuffing, no FCS, no trailing 0x7E. `len` counts the
+            // entire frame including header.
+            if (declared_len as usize) != raw.len() {
+                return Err(ParseError::LengthMismatch {
+                    declared: declared_len,
+                    actual: raw.len(),
+                });
+            }
+            let payload = if raw.len() > 18 {
+                raw[18..].to_vec()
+            } else {
+                Vec::new()
+            };
+            Ok(Self {
+                kind: FrameKind::L1Only,
+                local_bt,
+                dest_bt,
+                control,
+                payload,
+            })
         }
-        let (payload, _fcs) = unstuffed.split_at(unstuffed.len() - 2);
-
-        Ok(Self {
-            local_bt,
-            dest_bt,
-            control,
-            payload: payload.to_vec(),
-        })
     }
 }
 
-/// Build a raw wire frame.
-///
-/// Caller supplies the **L2 payload** (starting with the L2 signature). The
-/// builder byte-stuffs, appends the FCS-16, wraps with the L1 header + trailer.
+/// Build a raw wire frame. Pick `L1Only` for discovery/control packets or
+/// `L2Wrapped` for any packet carrying the SMA L2 signature.
 pub struct FrameBuilder {
+    kind: FrameKind,
     local_bt: [u8; 6],
     dest_bt: [u8; 6],
     control: u16,
@@ -123,8 +175,21 @@ pub struct FrameBuilder {
 }
 
 impl FrameBuilder {
+    /// L2-wrapped frame (the default). Payload will be byte-stuffed + FCS'd +
+    /// trailed with 0x7E.
     pub fn new(local_bt: [u8; 6], dest_bt: [u8; 6], control: u16) -> Self {
+        Self::new_with_kind(FrameKind::L2Wrapped, local_bt, dest_bt, control)
+    }
+
+    /// Construct with an explicit frame kind.
+    pub fn new_with_kind(
+        kind: FrameKind,
+        local_bt: [u8; 6],
+        dest_bt: [u8; 6],
+        control: u16,
+    ) -> Self {
         Self {
+            kind,
             local_bt,
             dest_bt,
             control,
@@ -132,27 +197,46 @@ impl FrameBuilder {
         }
     }
 
-    /// Append a slice to the payload (unstuffed, raw bytes).
+    /// Append payload bytes (unstuffed).
     pub fn extend(&mut self, bytes: &[u8]) -> &mut Self {
         self.payload.extend_from_slice(bytes);
         self
     }
 
-    /// Serialize the frame to its on-wire bytes.
+    /// Serialize to on-wire bytes.
     pub fn build(&self) -> Vec<u8> {
-        // FCS over the raw (unstuffed) payload.
-        let fcs = Fcs16::new();
-        let mut fcs = fcs;
+        match self.kind {
+            FrameKind::L1Only => self.build_l1_only(),
+            FrameKind::L2Wrapped => self.build_l2_wrapped(),
+        }
+    }
+
+    fn build_l1_only(&self) -> Vec<u8> {
+        // L1 frames: 18-byte header + raw payload. No stuffing, no FCS, no trailer.
+        let total_len = 18 + self.payload.len();
+        let mut out = Vec::with_capacity(total_len);
+        out.push(FRAME_DELIMITER);
+        let len_lo = (total_len & 0xFF) as u8;
+        let len_hi = ((total_len >> 8) & 0xFF) as u8;
+        out.push(len_lo);
+        out.push(len_hi);
+        out.push(FRAME_DELIMITER ^ len_lo ^ len_hi);
+        out.extend_from_slice(&self.local_bt);
+        out.extend_from_slice(&self.dest_bt);
+        out.push((self.control & 0xFF) as u8);
+        out.push((self.control >> 8) as u8);
+        out.extend_from_slice(&self.payload);
+        out
+    }
+
+    fn build_l2_wrapped(&self) -> Vec<u8> {
+        let mut fcs = Fcs16::new();
         fcs.update_slice(&self.payload);
         let fcs_val = fcs.finalize();
-
-        // Stuff payload + fcs (which is *also* stuffed on the wire).
         let mut stuffable = self.payload.clone();
         stuffable.push((fcs_val & 0xFF) as u8);
         stuffable.push((fcs_val >> 8) as u8);
         let stuffed = stuff(&stuffable);
-
-        // Header (18 bytes) + stuffed payload + 0x7E trailer.
         let total_len = 18 + stuffed.len() + 1;
         let mut out = Vec::with_capacity(total_len);
         out.push(FRAME_DELIMITER);

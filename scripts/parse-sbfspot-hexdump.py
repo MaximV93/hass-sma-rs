@@ -1,94 +1,93 @@
 #!/usr/bin/env python3
-"""Parse SBFspot's `-debug=5` stdout into clean hex-per-line frame fixtures.
+"""Parse SBFspot's `-d5` hex-dump output into per-frame fixtures.
 
-Usage:
-    python3 parse-sbfspot-hexdump.py INPUT.log OUTPUT_DIR/
+SBFspot's HexDump() format:
 
-SBFspot's HexDump() emits blocks like:
+    --------: 00 01 02 03 04 05 06 07 08 09
+    00000000: 7E 17 00 69 00 00 00 00 00 00
+    00000010: 01 00 00 00 00 00 01 02 76 65
+    00000020: 72 0D 0A
+    23 Bytes sent
 
-    [send] 14 Bytes:
-        7e 1a 00 64 04 42 1a 5a 37 74 ff ff ff ff ff ff
-        01 00 09 a0 0c 04 fd ff
+Received packets are framed by:
 
-Each such block becomes one frame in OUTPUT_DIR, named:
+    <<<====== Content of pcktBuf =======>>>
+    --------: 00 01 02 03 04 05 06 07 08 09
+    00000000: 7E 1F 00 61 ...
 
-    NNNN-{send|recv}.hex
+Every frame is emitted here — both sent and received. The trailing byte
+count ("23 Bytes sent") distinguishes direction for sends; receives are
+framed by the <<<... Content of pcktBuf ...>>> banner.
 
-with one line = one byte pair (so they remain human-diffable).
+Output: NNNN-{send|recv}.hex, one file per frame. Whitespace-separated bytes.
 """
 import re
 import sys
 from pathlib import Path
 from typing import List, Tuple
 
-# Header lines from HexDump(). SBFspot prints slightly different wording for
-# send vs recv; we match both.
-HEADER = re.compile(
-    r"^\s*(?P<dir>(?:\[send\]|\[recv\]|sending|received))\s*"
-    r"(?P<count>\d+)\s+Bytes",
-    re.IGNORECASE,
-)
-HEX_LINE = re.compile(r"^\s*((?:[0-9a-fA-F]{2}\s*)+)$")
+# Column guide line (always precedes hex rows)
+COL_GUIDE = re.compile(r"^-+:\s+00\s+01\s+02")
+# Hex data row: "00000010: 7E 1F 00 ..."
+HEX_ROW = re.compile(r"^[0-9A-Fa-f]{8}:\s+((?:[0-9A-Fa-f]{2}\s*)+)$")
+# Sent-frame trailer
+SENT_TRAIL = re.compile(r"^\s*(\d+)\s+Bytes\s+sent", re.IGNORECASE)
+# Received-frame banner
+RECV_BANNER = re.compile(r"Content\s+of\s+pcktBuf", re.IGNORECASE)
 
 
-def parse(input_path: Path) -> List[Tuple[str, bytes]]:
-    """Walk through input, collect (direction, bytes) tuples."""
-    text = input_path.read_text(errors="replace")
+def parse(lines: List[str]) -> List[Tuple[str, bytes]]:
     frames: List[Tuple[str, bytes]] = []
-    current_bytes: List[int] = []
-    current_dir: str = ""
-    in_frame = False
-    expected: int = 0
+    current: List[int] = []
+    collecting = False
+    pending_direction = ""  # "recv" if we saw the banner; else assume "send"
 
-    for line in text.splitlines():
-        header = HEADER.search(line)
-        if header:
-            if in_frame and current_bytes:
-                frames.append(
-                    (current_dir, bytes(current_bytes)),
-                )
-            in_frame = True
-            raw_dir = header.group("dir").lower()
-            current_dir = (
-                "send" if "send" in raw_dir else "recv"
-            )
-            expected = int(header.group("count"))
-            current_bytes = []
+    for line in lines:
+        if RECV_BANNER.search(line):
+            pending_direction = "recv"
             continue
 
-        if in_frame:
-            m = HEX_LINE.match(line)
+        if COL_GUIDE.match(line):
+            # New frame begins
+            if current:
+                direction = pending_direction or "send"
+                frames.append((direction, bytes(current)))
+                current = []
+            collecting = True
+            continue
+
+        if collecting:
+            m = HEX_ROW.match(line)
             if m:
-                for token in m.group(1).split():
-                    current_bytes.append(int(token, 16))
-                if len(current_bytes) >= expected:
-                    frames.append(
-                        (current_dir, bytes(current_bytes[:expected])),
-                    )
-                    in_frame = False
-                    current_bytes = []
-            elif line.strip() == "":
+                current.extend(int(t, 16) for t in m.group(1).split())
                 continue
-            else:
-                # Non-hex line ends frame
-                if current_bytes:
-                    frames.append(
-                        (current_dir, bytes(current_bytes[:expected]) if expected else bytes(current_bytes)),
-                    )
-                in_frame = False
-                current_bytes = []
-    if in_frame and current_bytes:
-        frames.append((current_dir, bytes(current_bytes)))
+            s = SENT_TRAIL.match(line)
+            if s and current:
+                count = int(s.group(1))
+                if len(current) > count:
+                    current = current[:count]
+                frames.append(("send", bytes(current)))
+                current = []
+                collecting = False
+                pending_direction = ""
+                continue
+            # Any other line ends a receive frame
+            if current:
+                frames.append((pending_direction or "recv", bytes(current)))
+                current = []
+                collecting = False
+                pending_direction = ""
+
+    if current:
+        frames.append((pending_direction or "send", bytes(current)))
     return frames
 
 
 def write_fixtures(frames: List[Tuple[str, bytes]], out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     for i, (direction, data) in enumerate(frames):
-        # one byte per line, hex
-        lines = " ".join(f"{b:02x}" for b in data)
-        name = f"{i:04d}-{direction}.hex"
-        (out_dir / name).write_text(lines + "\n")
+        line = " ".join(f"{b:02x}" for b in data)
+        (out_dir / f"{i:04d}-{direction}.hex").write_text(line + "\n")
 
 
 def main() -> int:
@@ -97,13 +96,12 @@ def main() -> int:
         return 2
     input_path = Path(sys.argv[1])
     out_dir = Path(sys.argv[2])
-    frames = parse(input_path)
-    print(f"parsed {len(frames)} frames from {input_path}")
+    frames = parse(input_path.read_text(errors="replace").splitlines())
     sends = sum(1 for d, _ in frames if d == "send")
     recvs = sum(1 for d, _ in frames if d == "recv")
-    print(f"  → {sends} sent, {recvs} received")
+    print(f"parsed {len(frames)} frames ({sends} send, {recvs} recv) from {input_path}")
     write_fixtures(frames, out_dir)
-    print(f"wrote fixtures to {out_dir}/")
+    print(f"wrote {len(frames)} fixture files to {out_dir}/")
     return 0
 
 
