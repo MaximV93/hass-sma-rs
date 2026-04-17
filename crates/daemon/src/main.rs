@@ -10,11 +10,13 @@ use inverter_client::session::{Session, SessionConfig};
 use inverter_client::values::parse_spot_ac_total_power;
 use mqtt_discovery::{DeviceKind, DiscoveryPublisher, InverterIdentity, MqttClientConfig};
 use sma_bt_protocol::{auth::UserGroup, commands::QueryKind};
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
+use telemetry::{init_tracing, metrics::InverterLabels, serve_metrics, MetricsRegistry};
 use tokio::signal;
 use tracing::{error, info, warn};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[derive(Parser, Debug)]
 #[command(version, about = "SMA Sunny Boy BT daemon (Rust rewrite)")]
@@ -24,20 +26,17 @@ struct Cli {
     config: PathBuf,
 }
 
-fn init_tracing() {
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with(fmt::layer().json())
-        .init();
-}
-
 /// Per-inverter task: connect, logon, poll until SIGTERM.
 async fn run_inverter(
     inv_cfg: InverterCfg,
     local_bt: Option<[u8; 6]>,
     publisher: DiscoveryPublisher,
     rfcomm_timeout: Duration,
+    metrics: MetricsRegistry,
 ) -> Result<()> {
+    let lbl = InverterLabels {
+        slot: inv_cfg.slot.clone(),
+    };
     let inverter_bt = parse_bt_mac(&inv_cfg.bt_address)
         .with_context(|| format!("invalid BT address: {}", inv_cfg.bt_address))?;
 
@@ -56,6 +55,7 @@ async fn run_inverter(
     let mut backoff = Duration::from_secs(2);
     loop {
         info!(slot = %inv_cfg.slot, "RFCOMM connect attempt");
+        metrics.bt_reconnects_total.get_or_create(&lbl).inc();
         let transport = match RfcommTransport::connect(inverter_bt, local_bt).await {
             Ok(t) => t,
             Err(e) => {
@@ -97,15 +97,21 @@ async fn run_inverter(
         let mut ticker = tokio::time::interval(inv_cfg.poll_interval);
         loop {
             ticker.tick().await;
+            metrics.polls_total.get_or_create(&lbl).inc();
             match session.query(QueryKind::SpotAcTotalPower).await {
                 Ok(body) => {
                     let r = parse_spot_ac_total_power(&body);
                     if let Some(w) = r.pac_total_w {
+                        metrics
+                            .ac_power_watts
+                            .get_or_create(&lbl)
+                            .set(w as f64);
                         let _ = publisher.publish_value(&identity, "ac_power", w).await;
                     }
                     let _ = publisher.publish_value(&identity, "status", "ok").await;
                 }
                 Err(e) => {
+                    metrics.poll_errors_total.get_or_create(&lbl).inc();
                     warn!(slot = %inv_cfg.slot, error = %e, "query failed — reconnecting");
                     let _ = publisher.publish_value(&identity, "status", "error").await;
                     break; // inner loop → reconnect
@@ -119,7 +125,7 @@ async fn run_inverter(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_tracing();
+    init_tracing(false);
 
     let cli = Cli::parse();
     let yaml = std::fs::read_to_string(&cli.config)
@@ -147,6 +153,19 @@ async fn main() -> Result<()> {
         state_prefix: cfg.mqtt.state_prefix.clone(),
     };
 
+    // Prometheus + /metrics endpoint.
+    let metrics = MetricsRegistry::new();
+    let metrics_addr = SocketAddr::from_str(&cfg.metrics_addr)
+        .with_context(|| format!("invalid metrics_addr: {}", cfg.metrics_addr))?;
+    {
+        let m = metrics.clone();
+        tokio::spawn(async move {
+            if let Err(e) = serve_metrics(metrics_addr, m).await {
+                error!(error = %e, "metrics server stopped");
+            }
+        });
+    }
+
     let mut tasks = Vec::new();
     for inv in cfg.inverters.iter() {
         let inv_clone = inv.clone();
@@ -154,8 +173,9 @@ async fn main() -> Result<()> {
         pub_cfg.client_id = format!("{}-{}", mqtt_base.client_id, inv.slot);
         let publisher = DiscoveryPublisher::connect(pub_cfg).await;
         let timeout = cfg.rfcomm_timeout;
+        let m = metrics.clone();
         tasks.push(tokio::spawn(async move {
-            if let Err(e) = run_inverter(inv_clone, local_bt, publisher, timeout).await {
+            if let Err(e) = run_inverter(inv_clone, local_bt, publisher, timeout, m).await {
                 error!(error = %e, "inverter task exited with error");
             }
         }));

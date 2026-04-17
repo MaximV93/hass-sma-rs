@@ -35,6 +35,13 @@ pub struct DaemonConfig {
     /// RFCOMM recv timeout per frame.
     #[serde(with = "humantime_serde", default = "default_rfcomm_timeout")]
     pub rfcomm_timeout: Duration,
+    /// Prometheus /metrics endpoint bind address. Default "0.0.0.0:9090".
+    #[serde(default = "default_metrics_addr")]
+    pub metrics_addr: String,
+}
+
+fn default_metrics_addr() -> String {
+    "0.0.0.0:9090".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
