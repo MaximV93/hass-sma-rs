@@ -319,17 +319,25 @@ impl<T: Transport> Session<T> {
         self.transport.send_frame(&frame_bytes).await?;
         debug!(?kind, pkt_id, "sent query");
 
-        let reply = self
-            .transport
-            .recv_frame(self.cfg.timeout_ms)
-            .await
-            .map_err(|e| match e {
-                TransportError::Timeout { .. } => SessionError::Silent { phase: "query" },
-                other => other.into(),
-            })?;
+        // Reply is L2 at L1-ctrl=0x0001. Skip any spontaneous L1 frames.
+        let reply = self.recv_until_l1_ctrl(0x0001, "query").await?;
         let frame = Frame::parse(&reply)?;
-        let (_hdr, data) =
-            decode_l2(&frame.payload).ok_or(SessionError::Protocol { phase: "query-l2" })?;
+        let (hdr, data) = match decode_l2(&frame.payload) {
+            Some(x) => x,
+            None => {
+                dump_bytes("query-reply", &reply, &frame);
+                return Err(SessionError::Protocol { phase: "query-l2" });
+            }
+        };
+        debug!(
+            ?kind,
+            reply_susy = hdr.app_susy_id,
+            reply_serial = hdr.app_serial,
+            reply_pkt_id = hdr.pkt_id,
+            reply_retcode = hdr.error_code,
+            body_len = data.len(),
+            "query reply"
+        );
         Ok(data.to_vec())
     }
 
