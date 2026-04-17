@@ -48,6 +48,7 @@ fn fake_init_reply(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
         ctrl2: 0x0000,
         app_susy_id: 101,
         app_serial: 2_120_121_246,
+        error_code: 0,
         pkt_id: 0x0001,
     };
     let body = [0u8; 16]; // arbitrary
@@ -67,10 +68,11 @@ fn fake_logon_reply(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
         ctrl2: 0x0100,
         app_susy_id: 101,          // pretend inverter SUSyID
         app_serial: 2_120_121_246, // pretend inverter serial
+        error_code: 0,             // 0 = logon OK
         pkt_id: 0x0001,
     };
-    // Body: retcode 0x0000 + filler
-    let body = [0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    // Body can be empty for a reply — SBFspot doesn't read it.
+    let body = [0u8; 12];
     let l2 = encode_l2(&hdr, &body);
     let mut b = FrameBuilder::new(local, dest, 0x0001);
     b.extend(&l2);
@@ -87,6 +89,7 @@ fn fake_query_reply(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
         ctrl2: 0x0000,
         app_susy_id: 101,
         app_serial: 2_120_121_246,
+        error_code: 0,
         pkt_id: 0x0002,
     };
 
@@ -167,7 +170,8 @@ async fn logon_failure_is_typed() {
     mock.queue_reply(fake_topology(inverter, local));
     mock.queue_reply(fake_init_reply(inverter, local));
 
-    // Logon reply with retcode 0x0100 (invalid password)
+    // Logon reply with retcode 0x0100 (invalid password) — retcode is now
+    // encoded into the L2 header's `error_code` field (wire L2body[22..24]).
     let hdr = L2Header {
         longwords: 0x0E,
         ctrl: 0xA0,
@@ -176,9 +180,10 @@ async fn logon_failure_is_typed() {
         ctrl2: 0x0100,
         app_susy_id: 101,
         app_serial: 2_120_121_246,
+        error_code: 0x0100,
         pkt_id: 0x0001,
     };
-    let body = [0x00, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; // retcode LE = 0x0100
+    let body = [0u8; 12];
     let l2 = encode_l2(&hdr, &body);
     let mut b = FrameBuilder::new(inverter, local, 0x0001);
     b.extend(&l2);

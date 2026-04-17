@@ -32,6 +32,10 @@ pub struct L2Header {
     pub app_susy_id: u16,
     /// Our application serial (session id); randomise per logOn.
     pub app_serial: u32,
+    /// Reply error/status code (SBFspot `ErrorCode`, BT L2body[22..24]).
+    /// Sender sets 0 on request; inverter overrides with a non-zero retcode
+    /// on failure (0x0100 = bad password, 0x0201 = session wrong, etc).
+    pub error_code: u16,
     /// 16-bit packet id (low 15 bits). Will be or'd with `APP_PACKET_BIT`.
     pub pkt_id: u16,
 }
@@ -72,7 +76,11 @@ pub fn encode_l2(header: &L2Header, body: &[u8]) -> Vec<u8> {
     buf.extend_from_slice(&tmp);
     LittleEndian::write_u16(&mut tmp[..2], header.ctrl2);
     buf.extend_from_slice(&tmp[..2]);
-    buf.extend_from_slice(&[0, 0, 0, 0]); // two reserved shorts
+    // First reserved short [22..24] = error_code (0 on send, retcode on reply).
+    LittleEndian::write_u16(&mut tmp[..2], header.error_code);
+    buf.extend_from_slice(&tmp[..2]);
+    // Second reserved short [24..26] = FragmentID, always 0 here.
+    buf.extend_from_slice(&[0, 0]);
     LittleEndian::write_u16(&mut tmp[..2], header.pkt_id | APP_PACKET_BIT);
     buf.extend_from_slice(&tmp[..2]);
     buf.extend_from_slice(body);
@@ -98,8 +106,10 @@ pub fn decode_l2(data: &[u8]) -> Option<(L2Header, &[u8])> {
         ctrl2: LittleEndian::read_u16(&data[12..14]),
         app_susy_id: LittleEndian::read_u16(&data[14..16]),
         app_serial: LittleEndian::read_u32(&data[16..20]),
-        // ctrl2 repeat at [20..22] is discarded
-        // reserved shorts at [22..26] are skipped
+        // ctrl2 repeat at [20..22] is discarded (same as ctrl2)
+        // first reserved short [22..24] = error_code (retcode on reply)
+        error_code: LittleEndian::read_u16(&data[22..24]),
+        // second reserved short [24..26] = FragmentID, ignored
         pkt_id: LittleEndian::read_u16(&data[26..28]) & !APP_PACKET_BIT,
     };
     Some((header, &data[28..]))
@@ -117,6 +127,7 @@ impl L2Header {
             ctrl2: 0x0000,
             app_susy_id: APP_SUSY_ID,
             app_serial,
+            error_code: 0,
             pkt_id,
         }
     }
@@ -131,6 +142,7 @@ impl L2Header {
             ctrl2: 0x0100,
             app_susy_id: APP_SUSY_ID,
             app_serial,
+            error_code: 0,
             pkt_id,
         }
     }
@@ -145,6 +157,7 @@ impl L2Header {
             ctrl2: 0x0000,
             app_susy_id: APP_SUSY_ID,
             app_serial,
+            error_code: 0,
             pkt_id,
         }
     }
@@ -162,6 +175,7 @@ impl L2Header {
             ctrl2: 0x0000,
             app_susy_id: APP_SUSY_ID,
             app_serial,
+            error_code: 0,
             pkt_id,
         }
     }
@@ -178,6 +192,7 @@ impl L2Header {
             ctrl2: 0x0300,
             app_susy_id: APP_SUSY_ID,
             app_serial,
+            error_code: 0,
             pkt_id,
         }
     }
@@ -205,6 +220,7 @@ mod tests {
             ctrl2: 0x0100,
             app_susy_id: APP_SUSY_ID,
             app_serial: 900_123_456,
+            error_code: 0,
             pkt_id: 0x0042,
         };
         let body = [0x0C, 0x04, 0xFD, 0xFF, 0x00, 0x00, 0x00, 0x00];

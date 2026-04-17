@@ -252,7 +252,7 @@ impl<T: Transport> Session<T> {
         // ── Step 7: recv logon reply (also ctrl=0x0001 at L1)
         let logon_reply = self.recv_until_l1_ctrl(0x0001, "logon").await?;
         let logon_frame = Frame::parse(&logon_reply)?;
-        let (hdr, body) = match decode_l2(&logon_frame.payload) {
+        let (hdr, _body) = match decode_l2(&logon_frame.payload) {
             Some(x) => x,
             None => {
                 dump_bytes("logon-reply", &logon_reply, &logon_frame);
@@ -261,17 +261,13 @@ impl<T: Transport> Session<T> {
             }
         };
 
-        // Retcode lives at body[0..2] in the SBFspot wire format.
-        if body.len() < 2 {
-            return Err(SessionError::Protocol {
-                phase: "logon-body",
-            });
-        }
-        let retcode = u16::from_le_bytes([body[0], body[1]]);
-        match retcode {
+        // Retcode is in the L2 header's first reserved short (SBFspot calls
+        // this `ErrorCode`, wire position L2body[22..24]). Cmd body starts
+        // AFTER this field and is unused on reply.
+        match hdr.error_code {
             0 => {}
             0x0100 => return Err(SessionError::LogonFailed { code: 0x0100 }),
-            _ => return Err(SessionError::LogonFailed { code: retcode }),
+            other => return Err(SessionError::LogonFailed { code: other }),
         }
 
         // Confirm the reply came from the same inverter we identified in init.
