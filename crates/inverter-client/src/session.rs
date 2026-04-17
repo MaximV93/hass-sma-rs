@@ -100,10 +100,11 @@ impl<T: Transport> Session<T> {
     }
 
     /// Receive frames until we see an L1 frame with the given ctrl value.
-    /// Non-matching frames (e.g. spontaneous 0x000a) are logged + discarded.
-    /// Returns the raw bytes of the matching frame.
+    /// Non-matching frames (e.g. spontaneous 0x000a, 0x000c, bare 0x0006 ack
+    /// frames) are logged + discarded. Mirrors SBFspot's `getPacket` which
+    /// retries on command-mismatch.
     async fn recv_until_l1_ctrl(&mut self, want_ctrl: u16, phase: &'static str) -> Result<Vec<u8>> {
-        for attempt in 0..6 {
+        for attempt in 0..12 {
             let bytes = self
                 .transport
                 .recv_frame(self.cfg.timeout_ms)
@@ -206,14 +207,7 @@ impl<T: Transport> Session<T> {
         self.transport.send_frame(&init_frame).await?;
         debug!(pkt_id, "init sent");
 
-        let init_reply_bytes = self
-            .transport
-            .recv_frame(self.cfg.timeout_ms)
-            .await
-            .map_err(|e| match e {
-                TransportError::Timeout { .. } => SessionError::Silent { phase: "init" },
-                other => other.into(),
-            })?;
+        let init_reply_bytes = self.recv_until_l1_ctrl(0x0001, "init").await?;
         let init_reply = Frame::parse(&init_reply_bytes)?;
         let (init_hdr, _init_cmd) = match decode_l2(&init_reply.payload) {
             Some(x) => x,
@@ -255,15 +249,8 @@ impl<T: Transport> Session<T> {
         self.transport.send_frame(&frame_bytes).await?;
         debug!(pkt_id, now_epoch, "sent logon");
 
-        // ── Step 7: recv logon reply
-        let logon_reply = self
-            .transport
-            .recv_frame(self.cfg.timeout_ms)
-            .await
-            .map_err(|e| match e {
-                TransportError::Timeout { .. } => SessionError::Silent { phase: "logon" },
-                other => other.into(),
-            })?;
+        // ── Step 7: recv logon reply (also ctrl=0x0001 at L1)
+        let logon_reply = self.recv_until_l1_ctrl(0x0001, "logon").await?;
         let logon_frame = Frame::parse(&logon_reply)?;
         let (hdr, body) = match decode_l2(&logon_frame.payload) {
             Some(x) => x,
