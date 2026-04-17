@@ -148,6 +148,39 @@ impl L2Header {
             pkt_id,
         }
     }
+
+    /// "Init" L2 packet (SBFspot's post-echo, pre-logon exchange). Command
+    /// body is `0x00000200 | 0x00000000 | 0x00000000` (12 bytes). The reply
+    /// carries the inverter's SUSyID + serial in the L2 header, which we
+    /// persist for subsequent packets.
+    pub fn init(pkt_id: u16, app_serial: u32) -> Self {
+        Self {
+            longwords: 0x09,
+            ctrl: 0xA0,
+            dst_susy_id: crate::constants::ANY_SUSY_ID,
+            dst_serial: crate::constants::ANY_SERIAL,
+            ctrl2: 0x0000,
+            app_susy_id: APP_SUSY_ID,
+            app_serial,
+            pkt_id,
+        }
+    }
+
+    /// Logoff L2 packet (SBFspot sends this RIGHT BEFORE logon — presumably
+    /// to reset any lingering session state). Command body is
+    /// `0xFFFD010E | 0xFFFFFFFF` (8 bytes).
+    pub fn logoff(pkt_id: u16, app_serial: u32) -> Self {
+        Self {
+            longwords: 0x08,
+            ctrl: 0xA0,
+            dst_susy_id: crate::constants::ANY_SUSY_ID,
+            dst_serial: crate::constants::ANY_SERIAL,
+            ctrl2: 0x0300,
+            app_susy_id: APP_SUSY_ID,
+            app_serial,
+            pkt_id,
+        }
+    }
 }
 
 #[cfg(test)]

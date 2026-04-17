@@ -19,20 +19,41 @@ use sma_bt_protocol::{
 
 /// Build a fake "hello" frame the inverter would send right after connect.
 /// Real hello is L1-only (no L2 signature) with ctrl=0x0002.
+/// Byte 19 of the wire frame (== payload[1]) = firmware version (≥ 4 required).
+/// Byte 22 (== payload[4]) = NetID.
 fn fake_hello(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
     let mut b = FrameBuilder::new_with_kind(FrameKind::L1Only, local, dest, 0x0002);
-    // 13 bytes mirroring the real hello shape (NetID + version info).
-    b.extend(&[0, 4, 0x70, 0, 2, 0, 0, 0, 0, 1, 0, 0, 0]);
+    // payload layout mirroring real hello: 0x00700400 | NetID | 0 | 1
+    // Bytes at frame offset: [18]=0x00 [19]=0x04 (fw) [20]=0x70 [21]=0x00 [22]=0x02 (netid)
+    b.extend(&[0x00, 0x04, 0x70, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]);
     b.build()
 }
 
-/// Build a fake `ver` reply. L1-only, ctrl=0x0002. Byte 19 of the wire frame
-/// (== payload[1]) is the firmware-protocol version; SBFspot rejects <4.
-fn fake_ver_reply(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
-    let mut payload = vec![0u8; 32];
-    payload[1] = 0x04;
-    let mut b = FrameBuilder::new_with_kind(FrameKind::L1Only, local, dest, 0x0002);
-    b.extend(&payload);
+/// Fake topology broadcast (ctrl=0x0005, L1-only). Real one carries a list
+/// of BT addresses but the session only cares about the ctrl match.
+fn fake_topology(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
+    let mut b = FrameBuilder::new_with_kind(FrameKind::L1Only, local, dest, 0x0005);
+    b.extend(&[0; 32]);
+    b.build()
+}
+
+/// Fake init-reply: L2-wrapped, carries inverter's SUSyID + serial in the
+/// header. Session persists these for query dst.
+fn fake_init_reply(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
+    let hdr = L2Header {
+        longwords: 0x09,
+        ctrl: 0xA0,
+        dst_susy_id: APP_SUSY_ID,
+        dst_serial: 900_123_456,
+        ctrl2: 0x0000,
+        app_susy_id: 101,
+        app_serial: 2_120_121_246,
+        pkt_id: 0x0001,
+    };
+    let body = [0u8; 16]; // arbitrary
+    let l2 = encode_l2(&hdr, &body);
+    let mut b = FrameBuilder::new(local, dest, 0x0001);
+    b.extend(&l2);
     b.build()
 }
 
@@ -87,10 +108,13 @@ async fn full_session_happy_path() {
     let inverter: [u8; 6] = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
 
     let mock = MockTransport::new();
-    // Inverter's pre-scripted replies (order = order the session reads them).
+    // Inverter's pre-scripted replies. Order mirrors the new handshake:
+    //   recv hello → send echo → recv topology → send init → recv init_reply
+    //   → send logoff → send logon → recv logon_reply → send query → recv query_reply
     mock.queue_replies(vec![
         fake_hello(inverter, local),
-        fake_ver_reply(inverter, local),
+        fake_topology(inverter, local),
+        fake_init_reply(inverter, local),
         fake_logon_reply(inverter, local),
         fake_query_reply(inverter, local),
     ]);
@@ -140,7 +164,8 @@ async fn logon_failure_is_typed() {
 
     let mock = MockTransport::new();
     mock.queue_reply(fake_hello(inverter, local));
-    mock.queue_reply(fake_ver_reply(inverter, local));
+    mock.queue_reply(fake_topology(inverter, local));
+    mock.queue_reply(fake_init_reply(inverter, local));
 
     // Logon reply with retcode 0x0100 (invalid password)
     let hdr = L2Header {

@@ -51,6 +51,33 @@ pub fn encode_password(pwd: &str, group: UserGroup) -> [u8; 12] {
     out
 }
 
+/// Build the full L2 body for the post-echo "init" packet SBFspot sends
+/// before logon. Command opcode `0x00000200` + two zero longs (12 bytes).
+/// The inverter's reply carries its SUSyID + serial in the L2 header.
+pub fn build_init_body(pkt_id: u16, app_serial: u32) -> Vec<u8> {
+    let mut cmd = Vec::with_capacity(12);
+    let mut tmp = [0u8; 4];
+    LittleEndian::write_u32(&mut tmp, 0x0000_0200);
+    cmd.extend_from_slice(&tmp);
+    cmd.extend_from_slice(&[0u8; 4]);
+    cmd.extend_from_slice(&[0u8; 4]);
+    let hdr = L2Header::init(pkt_id, app_serial);
+    encode_l2(&hdr, &cmd)
+}
+
+/// Build the full L2 body for the pre-logon "logoff" packet SBFspot sends to
+/// clear any lingering session. Command body: `0xFFFD010E | 0xFFFFFFFF`.
+pub fn build_logoff_body(pkt_id: u16, app_serial: u32) -> Vec<u8> {
+    let mut cmd = Vec::with_capacity(8);
+    let mut tmp = [0u8; 4];
+    LittleEndian::write_u32(&mut tmp, 0xFFFD_010E);
+    cmd.extend_from_slice(&tmp);
+    LittleEndian::write_u32(&mut tmp, 0xFFFF_FFFF);
+    cmd.extend_from_slice(&tmp);
+    let hdr = L2Header::logoff(pkt_id, app_serial);
+    encode_l2(&hdr, &cmd)
+}
+
 /// Build the full L2 body (header + logon command) for an initial logon.
 ///
 /// Parameters mirror the SBFspot wire format:
