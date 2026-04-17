@@ -185,8 +185,33 @@ impl<T: Transport> Session<T> {
                 other => other.into(),
             })?;
         let logon_frame = Frame::parse(&logon_reply)?;
-        let (hdr, body) =
-            decode_l2(&logon_frame.payload).ok_or(SessionError::Protocol { phase: "logon-l2" })?;
+        let (hdr, body) = match decode_l2(&logon_frame.payload) {
+            Some(x) => x,
+            None => {
+                // Diagnostic: dump raw bytes + parsed kind so next iteration
+                // can see exactly what the inverter sent.
+                let hex_raw: String = logon_reply
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let hex_payload: String = logon_frame
+                    .payload
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                tracing::error!(
+                    raw_len = logon_reply.len(),
+                    payload_len = logon_frame.payload.len(),
+                    kind = ?logon_frame.kind,
+                    raw = %hex_raw,
+                    payload = %hex_payload,
+                    "logon-l2 decode failed — dumping bytes"
+                );
+                return Err(SessionError::Protocol { phase: "logon-l2" });
+            }
+        };
 
         // Retcode lives at body[0..2] in the SBFspot wire format.
         if body.len() < 2 {

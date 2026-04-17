@@ -105,18 +105,35 @@ impl Frame {
         dest_bt.copy_from_slice(&raw[10..16]);
         let control = u16::from_le_bytes([raw[16], raw[17]]);
 
-        // Decide L1 vs L2 based on L2 signature. On the wire SMA emits a
-        // literal 0x7E separator immediately after the L1 header, BEFORE the
-        // L2 signature. So an L2-wrapped frame has shape:
+        // Decide L1 vs L2 based on L2 signature. Two L2 shapes observed:
         //
-        //     [0..18] L1 header | [18] 0x7E sep | [19..23] L2 sig | stuffed body | FCS | 0x7E
-        let has_l2_sig = raw.len() >= 23
+        // A. "Separator" shape (what SBFspot emits on send, and what the
+        //    captured discovery packet proves for outbound frames):
+        //        [0..18] L1 hdr | [18] 0x7E sep | [19..23] L2 sig | stuffed body | FCS | 0x7E
+        //
+        // B. "No-separator" shape (observed on receive — the inverter's
+        //    logon reply places the L2 signature immediately after the L1
+        //    header, no 0x7E separator):
+        //        [0..18] L1 hdr | [18..22] L2 sig | stuffed body | FCS | 0x7E
+        //
+        // We accept both on parse. Builder emits shape A unconditionally —
+        // mirroring what SBFspot sends and what live inverters accept.
+        let l2_sig_offset = if raw.len() >= 22
+            && LittleEndian::read_u32(&raw[18..22]) == BT_L2_SIGNATURE
+        {
+            Some(18)
+        } else if raw.len() >= 23
             && raw[18] == FRAME_DELIMITER
-            && LittleEndian::read_u32(&raw[19..23]) == BT_L2_SIGNATURE;
+            && LittleEndian::read_u32(&raw[19..23]) == BT_L2_SIGNATURE
+        {
+            Some(19)
+        } else {
+            None
+        };
 
-        if has_l2_sig {
-            // L2-wrapped. 18-byte L1 header, 0x7E separator, stuffed L2 body
-            // (incl. FCS-16 trailer), trailing 0x7E.
+        if let Some(sig_off) = l2_sig_offset {
+            // L2-wrapped. Stuffed region runs from the L2 sig to just before
+            // the trailing 0x7E.
             if *raw.last().unwrap() != FRAME_DELIMITER {
                 return Err(ParseError::MissingEnd {
                     byte: *raw.last().unwrap(),
@@ -128,8 +145,7 @@ impl Frame {
                     actual: raw.len(),
                 });
             }
-            // Skip the separator 0x7E at [18] AND the trailing 0x7E.
-            let stuffed = &raw[19..raw.len() - 1];
+            let stuffed = &raw[sig_off..raw.len() - 1];
             let unstuffed = unstuff(stuffed)?;
             if unstuffed.len() < 2 {
                 return Err(ParseError::TooShort {
