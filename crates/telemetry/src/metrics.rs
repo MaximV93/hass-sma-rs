@@ -20,10 +20,24 @@ pub struct InverterLabels {
 #[derive(Clone)]
 pub struct MetricsRegistry {
     pub registry: Arc<Mutex<Registry>>,
+    // --- Session lifecycle ---
     pub polls_total: Family<InverterLabels, Counter>,
     pub poll_errors_total: Family<InverterLabels, Counter>,
     pub bt_reconnects_total: Family<InverterLabels, Counter>,
+    pub handshake_errors_total: Family<InverterLabels, Counter>,
+    pub inverter_awake: Family<InverterLabels, Gauge<i64>>,
+    pub last_successful_poll_unix: Family<InverterLabels, Gauge<i64>>,
+    // --- AC/DC live values ---
     pub ac_power_watts: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub ac_voltage_l1: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub ac_current_l1: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub grid_frequency_hz: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub dc_power_s1_watts: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub dc_power_s2_watts: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub inverter_temperature_c: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    // --- Energy counters (monotonically increasing) ---
+    pub energy_today_wh: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub energy_lifetime_wh: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
 }
 
 impl MetricsRegistry {
@@ -51,12 +65,84 @@ impl MetricsRegistry {
             bt_reconnects_total.clone(),
         );
 
-        let ac_power_watts =
-            Family::<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>::default();
+        let handshake_errors_total = Family::<InverterLabels, Counter>::default();
+        registry.register(
+            "sma_handshake_errors_total",
+            "Total number of BT handshake/logon failures",
+            handshake_errors_total.clone(),
+        );
+
+        let inverter_awake = Family::<InverterLabels, Gauge<i64>>::default();
+        registry.register(
+            "sma_inverter_awake",
+            "1 when the inverter is responsive, 0 when it's asleep (BT offline)",
+            inverter_awake.clone(),
+        );
+
+        let last_successful_poll_unix = Family::<InverterLabels, Gauge<i64>>::default();
+        registry.register(
+            "sma_last_successful_poll_unix",
+            "Unix timestamp of the most recent fully successful poll cycle",
+            last_successful_poll_unix.clone(),
+        );
+
+        let new_float_gauge = || {
+            Family::<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>::default()
+        };
+
+        let ac_power_watts = new_float_gauge();
         registry.register(
             "sma_ac_power_watts",
-            "Last observed AC output power in watts",
+            "Last observed total AC output power in watts",
             ac_power_watts.clone(),
+        );
+        let ac_voltage_l1 = new_float_gauge();
+        registry.register(
+            "sma_ac_voltage_l1",
+            "Last observed L1 AC grid voltage",
+            ac_voltage_l1.clone(),
+        );
+        let ac_current_l1 = new_float_gauge();
+        registry.register(
+            "sma_ac_current_l1",
+            "Last observed L1 AC current",
+            ac_current_l1.clone(),
+        );
+        let grid_frequency_hz = new_float_gauge();
+        registry.register(
+            "sma_grid_frequency_hz",
+            "Last observed grid frequency",
+            grid_frequency_hz.clone(),
+        );
+        let dc_power_s1_watts = new_float_gauge();
+        registry.register(
+            "sma_dc_power_s1_watts",
+            "Last observed DC string 1 power",
+            dc_power_s1_watts.clone(),
+        );
+        let dc_power_s2_watts = new_float_gauge();
+        registry.register(
+            "sma_dc_power_s2_watts",
+            "Last observed DC string 2 power",
+            dc_power_s2_watts.clone(),
+        );
+        let inverter_temperature_c = new_float_gauge();
+        registry.register(
+            "sma_inverter_temperature_c",
+            "Last observed internal inverter temperature",
+            inverter_temperature_c.clone(),
+        );
+        let energy_today_wh = new_float_gauge();
+        registry.register(
+            "sma_energy_today_wh",
+            "Energy produced since midnight (Wh, monotonic per day)",
+            energy_today_wh.clone(),
+        );
+        let energy_lifetime_wh = new_float_gauge();
+        registry.register(
+            "sma_energy_lifetime_wh",
+            "Lifetime energy produced (Wh, monotonic)",
+            energy_lifetime_wh.clone(),
         );
 
         Self {
@@ -64,7 +150,18 @@ impl MetricsRegistry {
             polls_total,
             poll_errors_total,
             bt_reconnects_total,
+            handshake_errors_total,
+            inverter_awake,
+            last_successful_poll_unix,
             ac_power_watts,
+            ac_voltage_l1,
+            ac_current_l1,
+            grid_frequency_hz,
+            dc_power_s1_watts,
+            dc_power_s2_watts,
+            inverter_temperature_c,
+            energy_today_wh,
+            energy_lifetime_wh,
         }
     }
 

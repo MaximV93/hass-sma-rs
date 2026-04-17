@@ -66,6 +66,7 @@ async fn publish_query_result(
         QueryKind::SpotAcVoltage => {
             let r = parse_spot_ac_voltage(body);
             if let Some(v) = r.uac1_v {
+                metrics.ac_voltage_l1.get_or_create(lbl).set(v as f64);
                 let _ = publisher.publish_value(identity, "ac_voltage_l1", format!("{:.2}", v)).await;
             }
             if let Some(v) = r.uac2_v {
@@ -75,6 +76,7 @@ async fn publish_query_result(
                 let _ = publisher.publish_value(identity, "ac_voltage_l3", format!("{:.2}", v)).await;
             }
             if let Some(a) = r.iac1_a {
+                metrics.ac_current_l1.get_or_create(lbl).set(a as f64);
                 let _ = publisher.publish_value(identity, "ac_current_l1", format!("{:.3}", a)).await;
             }
             if let Some(a) = r.iac2_a {
@@ -87,9 +89,11 @@ async fn publish_query_result(
         QueryKind::SpotDcPower => {
             let r = parse_spot_dc_power(body);
             if let Some(w) = r.pdc1_w {
+                metrics.dc_power_s1_watts.get_or_create(lbl).set(w as f64);
                 let _ = publisher.publish_value(identity, "dc_power_s1", w).await;
             }
             if let Some(w) = r.pdc2_w {
+                metrics.dc_power_s2_watts.get_or_create(lbl).set(w as f64);
                 let _ = publisher.publish_value(identity, "dc_power_s2", w).await;
             }
         }
@@ -111,11 +115,13 @@ async fn publish_query_result(
         QueryKind::EnergyProduction => {
             let (day, total) = parse_energy_production(body);
             if let Some(wh) = day {
+                metrics.energy_today_wh.get_or_create(lbl).set(wh as f64);
                 let _ = publisher
                     .publish_value(identity, "energy_today", format!("{:.3}", wh as f64 / 1000.0))
                     .await;
             }
             if let Some(wh) = total {
+                metrics.energy_lifetime_wh.get_or_create(lbl).set(wh as f64);
                 let _ = publisher
                     .publish_value(identity, "energy_lifetime", format!("{:.3}", wh as f64 / 1000.0))
                     .await;
@@ -136,11 +142,13 @@ async fn publish_query_result(
         }
         QueryKind::InverterTemperature => {
             if let Some(c) = parse_inverter_temperature(body) {
+                metrics.inverter_temperature_c.get_or_create(lbl).set(c as f64);
                 let _ = publisher.publish_value(identity, "temperature", format!("{:.2}", c)).await;
             }
         }
         QueryKind::SpotGridFrequency => {
             if let Some(hz) = parse_grid_frequency(body) {
+                metrics.grid_frequency_hz.get_or_create(lbl).set(hz as f64);
                 let _ = publisher.publish_value(identity, "grid_frequency", format!("{:.2}", hz)).await;
             }
         }
@@ -202,15 +210,15 @@ async fn run_inverter(
         let transport = match RfcommTransport::connect(inverter_bt, local_bt).await {
             Ok(t) => {
                 host_down_streak = 0;
+                metrics.inverter_awake.get_or_create(&lbl).set(1);
                 t
             }
             Err(e) => {
                 let err_str = e.to_string();
                 if err_str.contains("Host is down") || err_str.contains("os error 112") {
                     host_down_streak += 1;
+                    metrics.inverter_awake.get_or_create(&lbl).set(0);
                     if host_down_streak == 3 && !published_offline {
-                        // After 3 host-down failures, mark availability offline
-                        // and switch to the long backoff.
                         let _ = publisher.publish_offline(&identity).await;
                         published_offline = true;
                         info!(
@@ -246,6 +254,7 @@ async fn run_inverter(
         let mut session = Session::new(transport, cfg);
 
         if let Err(e) = session.handshake_and_logon().await {
+            metrics.handshake_errors_total.get_or_create(&lbl).inc();
             error!(slot = %inv_cfg.slot, error = %e, "handshake/logon failed");
             let _ = session.close().await;
             tokio::time::sleep(backoff).await;
@@ -313,10 +322,12 @@ async fn run_inverter(
                 }
             }
 
-            // Publish last-poll timestamp on success (ISO 8601).
+            // Publish last-poll timestamp on success (ISO 8601) + update
+            // metric for Grafana/alerting.
             if cycle_ok {
-                let now = chrono::Utc::now().to_rfc3339();
-                let _ = publisher.publish_value(&identity, "last_poll", &now).await;
+                let now = chrono::Utc::now();
+                metrics.last_successful_poll_unix.get_or_create(&lbl).set(now.timestamp());
+                let _ = publisher.publish_value(&identity, "last_poll", now.to_rfc3339()).await;
                 let _ = publisher.publish_value(&identity, "status", "ok").await;
             } else {
                 let _ = publisher.publish_value(&identity, "status", "error").await;
