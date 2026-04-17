@@ -1,0 +1,10 @@
+[package]
+name = "bluez-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "placeholder"
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true

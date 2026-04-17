@@ -1,0 +1,22 @@
+[package]
+name = "hass-sma-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Daemon binary wiring all crates. Implementation staged V5.1+."
+
+[[bin]]
+name = "hass-sma-daemon"
+path = "src/main.rs"
+
+[dependencies]
+sma-bt-protocol = { path = "../sma-bt-protocol" }
+bluez-transport = { path = "../bluez-transport" }
+inverter-client = { path = "../inverter-client" }
+mqtt-discovery = { path = "../mqtt-discovery" }
+storage = { path = "../storage" }
+telemetry = { path = "../telemetry" }
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
