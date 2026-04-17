@@ -269,6 +269,46 @@ fn stuff(data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Parse a SBFspot "L2-only blob" — the post-L1-strip representation of a
+/// received frame as it ends up in SBFspot's pcktBuf for debug display.
+///
+/// Shape: `0x7E | L2Signature (FF 03 60 65) | stuffed L2 body | FCS | 0x7E [ optional junk ]`.
+///
+/// Returns the un-stuffed L2 body (signature + header + command body),
+/// with the FCS stripped.
+pub fn parse_l2_only_blob(raw: &[u8]) -> Result<Vec<u8>, ParseError> {
+    // Must begin with 0x7E + L2 signature
+    if raw.len() < 6 {
+        return Err(ParseError::TooShort { got: raw.len(), need: 6 });
+    }
+    if raw[0] != FRAME_DELIMITER {
+        return Err(ParseError::MissingStart { byte: raw[0] });
+    }
+    if raw[1..5] != [0xFF, 0x03, 0x60, 0x65] {
+        return Err(ParseError::HeaderChecksum { got: raw[1], expected: 0xFF });
+    }
+
+    // Find the next 0x7E after position 5 — that's the end of the stuffed body.
+    // A 0x7E inside the body would be byte-stuffed as `0x7D 0x5E`, so any
+    // unescaped 0x7E is truly the terminator.
+    let end = raw
+        .iter()
+        .enumerate()
+        .skip(5)
+        .find(|(_, &b)| b == FRAME_DELIMITER)
+        .map(|(i, _)| i)
+        .ok_or(ParseError::MissingEnd { byte: 0 })?;
+
+    let stuffed = &raw[1..end];
+    let unstuffed = unstuff(stuffed)?;
+    if unstuffed.len() < 2 {
+        return Err(ParseError::TooShort { got: unstuffed.len(), need: 2 });
+    }
+    // Last 2 bytes are the FCS trailer — strip.
+    let (body, _fcs) = unstuffed.split_at(unstuffed.len() - 2);
+    Ok(body.to_vec())
+}
+
 /// Remove byte-stuffing from `data`. Errors if an escape is truncated.
 fn unstuff(data: &[u8]) -> Result<Vec<u8>, ParseError> {
     let mut out = Vec::with_capacity(data.len());

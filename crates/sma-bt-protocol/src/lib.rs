@@ -46,7 +46,7 @@ pub mod packet;
 pub use auth::{build_logon_body, encode_password, UserGroup};
 pub use commands::{build_query_body, QueryKind};
 pub use constants::*;
-pub use frame::{Frame, FrameBuilder, ParseError};
+pub use frame::{parse_l2_only_blob, Frame, FrameBuilder, FrameKind, ParseError};
 pub use packet::{decode_l2, encode_l2, L2Header};
 
 /// Byte values that require stuffing when sent inside a byte-stuffed payload.

@@ -5,7 +5,7 @@
 //! real captures land (via `scripts/parse-sbfspot-hexdump.py`) the test
 //! automatically gains coverage.
 
-use sma_bt_protocol::Frame;
+use sma_bt_protocol::{parse_l2_only_blob, Frame};
 use std::fs;
 use std::path::PathBuf;
 
@@ -74,11 +74,14 @@ fn all_captured_frames_parse() {
             truncated += 1;
             continue;
         }
-        // Bucket 2: L2-only blob starts with `7e ff 03 60 65`.
-        if raw[0] == 0x7E
-            && raw.get(1..5) == Some(&[0xFF, 0x03, 0x60, 0x65])
-        {
-            l2_only += 1;
+        // Bucket 2: L2-only blob starts with `7e ff 03 60 65`. Validate via
+        // parse_l2_only_blob — FCS must match, stuffing must unpack cleanly.
+        if raw[0] == 0x7E && raw.get(1..5) == Some(&[0xFF, 0x03, 0x60, 0x65]) {
+            match parse_l2_only_blob(&raw) {
+                Ok(_) => l2_only += 1,
+                Err(e) => l1_failed
+                    .push(format!("{}: L2 blob: {}", path.display(), e)),
+            }
             continue;
         }
         match Frame::parse(&raw) {
