@@ -12,28 +12,26 @@ use inverter_client::{
 use sma_bt_protocol::{
     auth::UserGroup,
     commands::QueryKind,
-    frame::FrameBuilder,
+    frame::{FrameBuilder, FrameKind},
     packet::{encode_l2, L2Header},
     APP_SUSY_ID,
 };
 
 /// Build a fake "hello" frame the inverter would send right after connect.
+/// Real hello is L1-only (no L2 signature) with ctrl=0x0002.
 fn fake_hello(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
-    // Minimal L2 payload so the frame builder is happy.
-    let mut b = FrameBuilder::new(local, dest, 0x0002);
-    b.extend(&[0xFF, 0x03, 0x60, 0x65, 0, 0, 0, 0]);
+    let mut b = FrameBuilder::new_with_kind(FrameKind::L1Only, local, dest, 0x0002);
+    // 13 bytes mirroring the real hello shape (NetID + version info).
+    b.extend(&[0, 4, 0x70, 0, 2, 0, 0, 0, 0, 1, 0, 0, 0]);
     b.build()
 }
 
-/// Build a fake `ver` reply. Byte 19 is the firmware-protocol version (>= 4
-/// means "modern firmware"); SBFspot rejects anything below 4.
+/// Build a fake `ver` reply. L1-only, ctrl=0x0002. Byte 19 of the wire frame
+/// (== payload[1]) is the firmware-protocol version; SBFspot rejects <4.
 fn fake_ver_reply(local: [u8; 6], dest: [u8; 6]) -> Vec<u8> {
     let mut payload = vec![0u8; 32];
-    // Pad so that byte 19 (relative to frame start with 18-byte L1 header +
-    // minimal payload) ends up as 0x04 or higher. Easier: put `0x04` at
-    // position 1 within payload -> position 19 of total frame.
     payload[1] = 0x04;
-    let mut b = FrameBuilder::new(local, dest, 0x0002);
+    let mut b = FrameBuilder::new_with_kind(FrameKind::L1Only, local, dest, 0x0002);
     b.extend(&payload);
     b.build()
 }

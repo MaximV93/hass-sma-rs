@@ -105,13 +105,18 @@ impl Frame {
         dest_bt.copy_from_slice(&raw[10..16]);
         let control = u16::from_le_bytes([raw[16], raw[17]]);
 
-        // Decide L1 vs L2 based on L2 signature at offset 18.
-        let has_l2_sig = raw.len() >= 22
-            && LittleEndian::read_u32(&raw[18..22]) == BT_L2_SIGNATURE;
+        // Decide L1 vs L2 based on L2 signature. On the wire SMA emits a
+        // literal 0x7E separator immediately after the L1 header, BEFORE the
+        // L2 signature. So an L2-wrapped frame has shape:
+        //
+        //     [0..18] L1 header | [18] 0x7E sep | [19..23] L2 sig | stuffed body | FCS | 0x7E
+        let has_l2_sig = raw.len() >= 23
+            && raw[18] == FRAME_DELIMITER
+            && LittleEndian::read_u32(&raw[19..23]) == BT_L2_SIGNATURE;
 
         if has_l2_sig {
-            // L2-wrapped. Spec: 18-byte L1 header, then stuffed L2 body +
-            // FCS, then trailing 0x7E.
+            // L2-wrapped. 18-byte L1 header, 0x7E separator, stuffed L2 body
+            // (incl. FCS-16 trailer), trailing 0x7E.
             if *raw.last().unwrap() != FRAME_DELIMITER {
                 return Err(ParseError::MissingEnd {
                     byte: *raw.last().unwrap(),
@@ -123,7 +128,8 @@ impl Frame {
                     actual: raw.len(),
                 });
             }
-            let stuffed = &raw[18..raw.len() - 1];
+            // Skip the separator 0x7E at [18] AND the trailing 0x7E.
+            let stuffed = &raw[19..raw.len() - 1];
             let unstuffed = unstuff(stuffed)?;
             if unstuffed.len() < 2 {
                 return Err(ParseError::TooShort {
@@ -237,7 +243,11 @@ impl FrameBuilder {
         stuffable.push((fcs_val & 0xFF) as u8);
         stuffable.push((fcs_val >> 8) as u8);
         let stuffed = stuff(&stuffable);
-        let total_len = 18 + stuffed.len() + 1;
+        // 18 L1 header + 1 separator (0x7E) + stuffed body + 1 trailer (0x7E).
+        // The separator is part of the SMA BT L2 wire shape — without it the
+        // inverter reads the L2 body misaligned and replies with a malformed
+        // frame that doesn't start with the L2 signature.
+        let total_len = 18 + 1 + stuffed.len() + 1;
         let mut out = Vec::with_capacity(total_len);
         out.push(FRAME_DELIMITER);
         let len_lo = (total_len & 0xFF) as u8;
@@ -249,8 +259,9 @@ impl FrameBuilder {
         out.extend_from_slice(&self.dest_bt);
         out.push((self.control & 0xFF) as u8);
         out.push((self.control >> 8) as u8);
+        out.push(FRAME_DELIMITER); // separator between L1 header and L2 body
         out.extend_from_slice(&stuffed);
-        out.push(FRAME_DELIMITER);
+        out.push(FRAME_DELIMITER); // frame trailer
         out
     }
 }
