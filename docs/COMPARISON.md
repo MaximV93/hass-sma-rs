@@ -141,11 +141,32 @@ All 12 fixes are committed with regression tests + hex dumps from real captures.
 | Phase | Status | Exit criterion |
 |---|---|---|
 | 1. Protocol parity + live validation | ✅ **done** (2026-04-18) | ≥10 real metrics live in HA |
-| 2. Parallel run | 📋 pending | hass-sma-rs + haos-sbfspot coexist over 7 days, no regressions |
+| 2. Parallel run | ⚠️ **tested, see below** | hass-sma-rs + haos-sbfspot coexist over 7 days, no regressions |
 | 3. Cutover | 📋 pending | haos-sbfspot uninstalled, dashboards migrated to `sensor.sbfspot_*` namespace |
 | 4. Archive backfill | 📋 pending | TimescaleDB crate wired, 5-min samples stored, HA LongTermStatistics ingesting |
 
-Rollback is always one addon restart away: MQTT namespaces (`hass-sma/*` vs `homeassistant/sbfspot_*`) are disjoint, so both stacks can co-publish.
+### Phase 2 parallel-run findings (2026-04-18 17:30)
+
+Ran both daemons simultaneously for ~4 minutes. Result: **haos-sbfspot's
+`PollIntervalSec: 5` config makes its cron fire back-to-back polls, leaving
+no BT window for hass-sma-rs to claim**. hass-sma-rs got EBUSY on every
+connect attempt → LWT flipped HA sensors to `unavailable` (correct behaviour
+of the availability topic). When haos-sbfspot was stopped, hass-sma-rs
+resumed instantly with full 11-query sweep returning retcode=0.
+
+hass-sma-rs 0.1.32 ships a `yield_every` + `yield_duration` per-inverter
+config to periodically release BT for a peer poller. With haos-sbfspot
+configured at a saner `PollIntervalSec` (30–60 s), this enables genuine
+coexistence: ours holds BT for `(yield_every × poll_interval)` minutes,
+then releases for `yield_duration` seconds.
+
+Recommended phase-2 config for Maxim's setup:
+- `hass-sma-rs`: `yield_every: 10`, `yield_duration: 90s` (8 min ours, 90 s peer)
+- `haos-sbfspot`: `PollIntervalSec: 90`, `PollIntervalDay: 10` (aligned with yield)
+
+Rollback is always one addon restart away: MQTT namespaces (`hass-sma/*`
+vs `homeassistant/sbfspot_*`) are disjoint, so both stacks can co-publish
+without entity collisions.
 
 ---
 
