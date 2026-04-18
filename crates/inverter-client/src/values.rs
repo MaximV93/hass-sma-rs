@@ -440,16 +440,50 @@ pub fn parse_grid_relay(body: &[u8]) -> Option<bool> {
     out
 }
 
-/// Map SMA inverter status tag id → human text. Subset of the SBFspot
-/// TagList most likely to appear for an SB HF-30.
+/// Map SMA inverter status tag id → human text. Subset of SBFspot's
+/// `TagListEN-US.txt`, focused on tags that appear in OperationHealth
+/// and OperationGriSwStt replies for Sunny Boy inverters.
 pub fn status_text(tag: u32) -> &'static str {
     match tag {
-        307 => "Ok",
-        455 => "Warning",
+        // Operation health (INV_STATUS)
         35 => "Error",
+        51 => "Closed",
         303 => "Off",
-        443 => "Closed",
+        304 => "Island mode",
+        307 => "Ok",
+        311 => "Open",
+        350 => "Waiting for feed-in",
+        396 => "Derating (temperature)",
+        455 => "Warning",
+        456 => "Waiting for DC",
+        457 => "Waiting for grid",
+        141 => "Derating active",
+        155 => "Grid island",
+        261 => "Derating active",
+        264 => "SMA Grid Guard OK",
+        366 => "Params set OK",
+        369 => "Update file OK",
         1266 => "Rated current warning",
+        // Faults (prefix them so they're distinguishable)
+        86 => "Fault: AC offset current sensor",
+        97 => "Fault: AC offset voltage",
+        117 => "Fault: DC current sensor A",
+        118 => "Fault: DC current sensor B",
+        137 => "Waiting for main CPU",
+        192 => "Fault: interior temp sensor",
+        193 => "Fault: power-unit temp sensor",
+        468 => "Fault: CAN init",
+        469 => "Fault: DA converter",
+        470 => "Fault: reverse current",
+        471 => "Fault: IPC communication",
+        472 => "Fault: RTC init",
+        473 => "Fault: overvoltage protector",
+        503 => "Fault: ambient temp sensor",
+        504 => "Fault: battery temp sensor",
+        505 => "Fault: DC voltage sensor",
+        506 => "Fault: power-unit temp sensor 2",
+        507 => "Fault: fan permanently on",
+        508 => "Fault: transformer temp sensor",
         _ => "Unknown",
     }
 }
