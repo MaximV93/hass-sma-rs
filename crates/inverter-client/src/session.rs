@@ -166,27 +166,27 @@ impl<T: Transport> Session<T> {
         Err(SessionError::Silent { phase })
     }
 
-    /// Receive frames until we see an L2-wrapped frame (ctrl=0x0001) whose
-    /// L2 header `pkt_id` matches `want_pkt_id`. SBFspot's getPacket loops
-    /// on pkt_id mismatch so replies to earlier requests (that might still
-    /// be in the receive buffer) get discarded instead of being consumed
-    /// as the reply to the current request.
-    ///
-    /// Returns (raw frame bytes, parsed L2 header, cmd body).
+    /// Receive frames until we see an L2-wrapped frame (any L1 ctrl, since
+    /// replies arrive as classic ctrl=0x0001 OR unsolicited ctrl=0x0008
+    /// pushes) whose L2 header `pkt_id` matches `want_pkt_id`. Mirrors
+    /// SBFspot's getPacket loop.
     async fn recv_l2_with_pkt_id(
         &mut self,
         want_pkt_id: u16,
         phase: &'static str,
     ) -> Result<(Vec<u8>, crate::session::L2Reply)> {
         for attempt in 0..16 {
-            let bytes = self.recv_until_l1_ctrl(0x0001, phase).await?;
+            let bytes = self
+                .transport
+                .recv_frame(self.cfg.timeout_ms)
+                .await
+                .map_err(|e| match e {
+                    TransportError::Timeout { .. } => SessionError::Silent { phase },
+                    other => other.into(),
+                })?;
             let frame = match Frame::parse(&bytes) {
                 Ok(f) => f,
                 Err(e) => {
-                    // Malformed frame (length mismatch, checksum, stuffing):
-                    // log the hex + skip. One bad frame shouldn't kill the
-                    // whole session — the inverter occasionally sends oddly
-                    // framed diagnostic data that we don't care about.
                     let hex: String = bytes
                         .iter()
                         .map(|b| format!("{:02x}", b))
@@ -203,10 +203,20 @@ impl<T: Transport> Session<T> {
                     continue;
                 }
             };
+            // Only L2-wrapped frames carry the pkt_id we care about.
+            if !matches!(frame.kind, FrameKind::L2Wrapped) {
+                debug!(
+                    attempt,
+                    phase,
+                    l1_ctrl = frame.control,
+                    "skipping non-L2 frame"
+                );
+                continue;
+            }
             let (hdr, data) = match decode_l2(&frame.payload) {
                 Some(x) => x,
                 None => {
-                    debug!(attempt, phase, "skipping non-L2 ctrl=0x0001 frame");
+                    debug!(attempt, phase, "skipping L2 frame that fails decode_l2");
                     continue;
                 }
             };
@@ -229,6 +239,7 @@ impl<T: Transport> Session<T> {
                 got_pkt = hdr.pkt_id,
                 got_susy = hdr.app_susy_id,
                 got_serial = hdr.app_serial,
+                l1_ctrl = frame.control,
                 "skipping L2 reply with non-matching pkt_id"
             );
         }
