@@ -151,7 +151,29 @@ impl<T: Transport> Session<T> {
     ) -> Result<(Vec<u8>, crate::session::L2Reply)> {
         for attempt in 0..16 {
             let bytes = self.recv_until_l1_ctrl(0x0001, phase).await?;
-            let frame = Frame::parse(&bytes)?;
+            let frame = match Frame::parse(&bytes) {
+                Ok(f) => f,
+                Err(e) => {
+                    // Malformed frame (length mismatch, checksum, stuffing):
+                    // log the hex + skip. One bad frame shouldn't kill the
+                    // whole session — the inverter occasionally sends oddly
+                    // framed diagnostic data that we don't care about.
+                    let hex: String = bytes
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    warn!(
+                        attempt,
+                        phase,
+                        len = bytes.len(),
+                        error = %e,
+                        bytes = %hex,
+                        "skipping malformed L2 frame"
+                    );
+                    continue;
+                }
+            };
             let (hdr, data) = match decode_l2(&frame.payload) {
                 Some(x) => x,
                 None => {
