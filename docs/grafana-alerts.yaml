@@ -1,0 +1,173 @@
+# Grafana unified-alerting rules for hass-sma-rs Prometheus metrics.
+#
+# Drop into Grafana UI: Alerting → Alert rules → Import rule file, or
+# if using Grafana Provisioning:
+#   /etc/grafana/provisioning/alerting/hass-sma-rs.yaml
+#
+# Every rule has `for:` durations tuned for SMA inverter behaviour
+# (brief intermittent disconnects at sunset are normal and shouldn't
+# page you).
+#
+# Prerequisites:
+# - Prometheus datasource wired to hass-sma-rs :9090/metrics
+# - Contact point configured for notification
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: hass-sma-rs
+    folder: Solar
+    interval: 1m
+    rules:
+      - uid: sma-inverter-offline-daylight
+        title: "SMA inverter offline during daylight"
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: |
+                sma_inverter_awake == 0
+                and on() hour() >= 6
+                and on() hour() <= 20
+              refId: A
+        for: 15m
+        annotations:
+          summary: "Inverter {{ $labels.slot }} offline for 15+ minutes during daylight window"
+          description: |
+            sma_inverter_awake is 0 but it's 06:00-20:00 local.
+            Expected: BT reachable, polling succeeding.
+            Possible causes:
+              - hass-sma-rs daemon down → check addon logs
+              - BT dongle dropped → check hci0 on HA host
+              - Inverter fault → check LCD display
+        labels:
+          severity: warning
+
+      - uid: sma-data-stale
+        title: "SMA poll stale > 10 min"
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: time() - sma_last_successful_poll_unix > 600
+              refId: A
+        for: 5m
+        annotations:
+          summary: "No successful poll from {{ $labels.slot }} for 10+ minutes"
+          description: |
+            Either the inverter is off (normal at night — fires 1h post-sunset
+            then silences via LWT once sensors go unavailable) or the daemon
+            is wedged. Cross-check with sma_inverter_awake — if that's 0 AND
+            it's night, this alert is expected and can be silenced or given a
+            daylight-only guard.
+        labels:
+          severity: info
+
+      - uid: sma-handshake-failure-rate
+        title: "SMA handshake failures climbing"
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: rate(sma_handshake_errors_total[10m]) > 0.05
+              refId: A
+        for: 10m
+        annotations:
+          summary: "{{ $labels.slot }} handshake failure rate high"
+          description: |
+            >3/min handshake failures averaged over 10 min suggests:
+              - MIS network interference (peer device answering instead)
+              - BT signal weak — move antenna closer
+              - Inverter firmware bug (rare)
+        labels:
+          severity: warning
+
+      - uid: sma-string-imbalance
+        title: "DC string power imbalance"
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: |
+                (sma_dc_power_s1_watts > 100)
+                and (abs(sma_dc_power_s1_watts - sma_dc_power_s2_watts) / sma_dc_power_s1_watts > 0.3)
+              refId: A
+        for: 30m
+        annotations:
+          summary: "DC string imbalance on {{ $labels.slot }}: S1={{ $values.A }}W S2=..."
+          description: |
+            String 1 differs from String 2 by > 30% for 30+ minutes while
+            either string is producing meaningfully (> 100 W). Possible:
+              - Shading (transient — will clear; suppress if known tree pattern)
+              - Panel failure on the weaker string
+              - MPPT tracking issue
+              - Dirty glass on one half of array
+        labels:
+          severity: warning
+
+      - uid: sma-temperature-high
+        title: "Inverter overheating"
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: sma_inverter_temperature_c > 75
+              refId: A
+        for: 5m
+        annotations:
+          summary: "{{ $labels.slot }} temperature {{ $values.A }}°C"
+          description: |
+            SB HF-30 series starts derating around 70-80°C. Sustained >75°C
+            indicates ventilation issue or ambient too warm. Derating will
+            kick in and reduce AC_POWER output below the DC_POWER
+            available. Clean intake filters, improve airflow.
+        labels:
+          severity: warning
+
+      - uid: sma-grid-frequency-out-of-spec
+        title: "Grid frequency out of spec"
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: |
+                (sma_grid_frequency_hz < 49.5 or sma_grid_frequency_hz > 50.5)
+                and (sma_grid_frequency_hz > 0)
+              refId: A
+        for: 2m
+        annotations:
+          summary: "Grid frequency {{ $values.A }}Hz outside 49.5-50.5 at {{ $labels.slot }}"
+          description: |
+            Belgian grid nominal is 50 Hz ± 1%. Sustained deviation means
+            grid instability (not our problem) — inverter's overcurrent
+            protection will eventually island. Record for DSO complaint.
+        labels:
+          severity: info
+
+      - uid: sma-bt-reconnect-storm
+        title: "Excessive BT reconnect rate"
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            model:
+              expr: rate(sma_bt_reconnects_total[5m]) * 60 > 3
+              refId: A
+        for: 5m
+        annotations:
+          summary: "{{ $labels.slot }} reconnecting >3/min"
+          description: |
+            Healthy steady-state is 0 reconnects/min (persistent session).
+            >3/min over 5 min means:
+              - Another BT consumer (haos-sbfspot, Sunny Explorer app) racing us
+                → configure yield_every / yield_duration
+              - HCI adapter flaky → check dmesg for usb resets
+              - Session state repeatedly rejected → review logs for retcode
+        labels:
+          severity: warning
