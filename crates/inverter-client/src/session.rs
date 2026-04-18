@@ -122,7 +122,28 @@ impl<T: Transport> Session<T> {
                     TransportError::Timeout { .. } => SessionError::Silent { phase },
                     other => other.into(),
                 })?;
-            let frame = Frame::parse(&bytes)?;
+            let frame = match Frame::parse(&bytes) {
+                Ok(f) => f,
+                Err(e) => {
+                    // Malformed frame — skip instead of tearing the session.
+                    // Observed live: SpotAcPower reply occasionally has bad
+                    // trailer byte. Log hex for later analysis.
+                    let hex: String = bytes
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    warn!(
+                        attempt,
+                        phase,
+                        len = bytes.len(),
+                        error = %e,
+                        bytes = %hex,
+                        "skipping malformed frame in recv_until_l1_ctrl"
+                    );
+                    continue;
+                }
+            };
             if frame.control == want_ctrl {
                 return Ok(bytes);
             }
