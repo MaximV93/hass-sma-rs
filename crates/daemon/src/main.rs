@@ -320,17 +320,22 @@ async fn run_inverter(
                 identity.firmware = ver;
             }
         }
+        // Model: first publish whatever was in config (survives TypeLabel
+        // queries that don't contain a recognisable tag). Then attempt
+        // TypeLabel — if it yields a known tag, override with the looked-up
+        // name; otherwise leave the config value intact.
+        let _ = publisher
+            .publish_value(&identity, "inverter_model", &identity.model)
+            .await;
         if let Ok(body) = session.query(QueryKind::TypeLabel).await {
             if let Some(tag) = parse_type_label_raw(&body) {
                 if let Some(model) = type_label_text(tag) {
                     let _ = publisher.publish_value(&identity, "inverter_model", model).await;
                     identity.model = model.to_string();
-                } else {
-                    let _ = publisher
-                        .publish_value(&identity, "inverter_model", format!("TagID {}", tag))
-                        .await;
                 }
+                // Unknown tag: keep the config-provided model in HA.
             }
+            // parse returned None: same — keep config model.
         }
 
         let mut ticker = tokio::time::interval(inv_cfg.poll_interval);

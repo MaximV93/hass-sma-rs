@@ -270,17 +270,23 @@ pub fn parse_type_label_raw(body: &[u8]) -> Option<u32> {
 /// preserve whatever string the config already provides.
 pub fn type_label_text(tag: u32) -> Option<&'static str> {
     match tag {
-        9072 => Some("SB 3000HF-30"),
-        9073 => Some("SB 3600TL-21"),
-        9074 => Some("SB 4000TL-21"),
-        9075 => Some("SB 5000TL-21"),
-        9164 => Some("SB 3000TL-21"),
-        9165 => Some("SB 2500TL-21"),
-        9166 => Some("SB 1600TL-10"),
-        9263 => Some("SB 2500HF-30"),
-        9264 => Some("SB 3000HF-30"),
-        9265 => Some("SB 2000HF-30"),
-        9266 => Some("SB 1300TL-10"),
+        // Source: SBFspot TagListEN-US.txt 9070–9090 block
+        9070 => Some("STP 17000TL-10"),
+        9071 => Some("SB 2000HF-30"),
+        9072 => Some("SB 2500HF-30"),
+        9073 => Some("SB 3000HF-30"),
+        9074 => Some("SB 3000TL-21"),
+        9075 => Some("SB 4000TL-21"),
+        9076 => Some("SB 5000TL-21"),
+        9077 => Some("SB 2000HFUS-30"),
+        9078 => Some("SB 2500HFUS-30"),
+        9079 => Some("SB 3000HFUS-30"),
+        9080 => Some("SB 8000TLUS"),
+        9081 => Some("SB 9000TLUS"),
+        9082 => Some("SB 10000TLUS"),
+        9084 => Some("WB 3600TL-20"),
+        9085 => Some("WB 5000TL-20"),
+        9086 => Some("SB 3800US-10"),
         _ => None,
     }
 }
