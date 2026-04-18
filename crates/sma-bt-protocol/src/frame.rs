@@ -132,34 +132,42 @@ impl Frame {
         };
 
         if let Some(sig_off) = l2_sig_offset {
-            // L2-wrapped. Stuffed region runs from the L2 sig to just before
-            // the trailing 0x7E.
-            if *raw.last().unwrap() != FRAME_DELIMITER {
-                return Err(ParseError::MissingEnd {
-                    byte: *raw.last().unwrap(),
-                });
-            }
             if (declared_len as usize) != raw.len() {
                 return Err(ParseError::LengthMismatch {
                     declared: declared_len,
                     actual: raw.len(),
                 });
             }
-            let stuffed = &raw[sig_off..raw.len() - 1];
+            // Two L2 framing shapes observed:
+            //  A. Classic reply (ctrl=0x0001): trailing 0x7E, body ends with
+            //     FCS16 before the trailer.
+            //  B. Unsolicited push (ctrl=0x0008): NO trailing 0x7E, NO FCS
+            //     — body runs to the end of the frame.
+            // `has_trailer` distinguishes them so callers get a consistent
+            // unstuffed payload regardless.
+            let has_trailer = *raw.last().unwrap() == FRAME_DELIMITER;
+            let stuffed_end = if has_trailer { raw.len() - 1 } else { raw.len() };
+            let stuffed = &raw[sig_off..stuffed_end];
             let unstuffed = unstuff(stuffed)?;
-            if unstuffed.len() < 2 {
-                return Err(ParseError::TooShort {
-                    got: unstuffed.len(),
-                    need: 2,
-                });
-            }
-            let (payload, _fcs) = unstuffed.split_at(unstuffed.len() - 2);
+            let payload = if has_trailer {
+                // Strip 2-byte FCS trailer.
+                if unstuffed.len() < 2 {
+                    return Err(ParseError::TooShort {
+                        got: unstuffed.len(),
+                        need: 2,
+                    });
+                }
+                unstuffed[..unstuffed.len() - 2].to_vec()
+            } else {
+                // Push frames have no FCS — take the whole unstuffed body.
+                unstuffed
+            };
             Ok(Self {
                 kind: FrameKind::L2Wrapped,
                 local_bt,
                 dest_bt,
                 control,
-                payload: payload.to_vec(),
+                payload,
             })
         } else {
             // L1-only: no stuffing, no FCS, no trailing 0x7E. `len` counts the
