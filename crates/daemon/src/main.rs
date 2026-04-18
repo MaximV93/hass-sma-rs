@@ -322,9 +322,25 @@ async fn run_inverter(
         }
 
         let mut ticker = tokio::time::interval(inv_cfg.poll_interval);
+        let mut poll_count: u32 = 0;
         loop {
             ticker.tick().await;
             metrics.polls_total.get_or_create(&lbl).inc();
+            poll_count += 1;
+
+            // Parallel-run: every `yield_every` polls, drop the BT session
+            // for `yield_duration` so another SMA integration can poll.
+            if inv_cfg.yield_every > 0 && poll_count % inv_cfg.yield_every == 0 {
+                info!(
+                    slot = %inv_cfg.slot,
+                    duration_secs = inv_cfg.yield_duration.as_secs(),
+                    "yielding BT session for parallel-run peer"
+                );
+                let _ = session.close().await;
+                tokio::time::sleep(inv_cfg.yield_duration).await;
+                break; // outer loop reconnects
+            }
+
             let mut cycle_ok = true;
 
             for kind in per_tick_queries.iter() {

@@ -75,6 +75,15 @@ pub struct InverterCfg {
     /// Multi-inverter support on this piconet.
     #[serde(default)]
     pub mis_enabled: bool,
+    /// Parallel-run mode: every N polls, drop the BT session for
+    /// `yield_duration` seconds so another SMA integration (e.g.
+    /// haos-sbfspot) can poll during the gap. 0 = disabled (default).
+    /// Example: `yield_every: 10` + `yield_duration: 60s` → every 10th
+    /// poll we disconnect for 60 s before reconnecting.
+    #[serde(default)]
+    pub yield_every: u32,
+    #[serde(with = "humantime_serde", default = "default_yield_duration")]
+    pub yield_duration: Duration,
 }
 
 fn default_mqtt_port() -> u16 {
@@ -100,6 +109,9 @@ fn default_model() -> String {
 }
 fn default_firmware() -> String {
     "unknown".into()
+}
+fn default_yield_duration() -> Duration {
+    Duration::from_secs(60)
 }
 
 impl DaemonConfig {
