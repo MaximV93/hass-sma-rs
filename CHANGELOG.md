@@ -3,6 +3,49 @@
 All notable changes to hass-sma-rs are tracked here. This project follows
 semantic-ish versioning; pre-1.0 is rapid iteration.
 
+## 0.1.38 — 2026-04-18
+
+### Added
+- **BT piconet topology log** — on every handshake the daemon logs every
+  BT device seen in the inverter's piconet with its MAC address and role
+  flag. Drastically simplifies finding additional inverter MACs (no more
+  inverter-LCD menu spelunking). Verified live: zolder piconet reports
+  3 inverter devices + our local BT host.
+
+## 0.1.37 — 2026-04-18
+
+### Fixed
+- **TypeLabel tag map corrected** — SBFspot's TagListEN-US.txt confirms
+  9073 = SB 3000HF-30 (my initial guess 9072 was wrong; 9072 is the SB
+  2500HF-30). Expanded lookup to cover 9070-9086 SB HF/TL family.
+- **Config-model fallback** — daemon now publishes identity.model from
+  config BEFORE the TypeLabel query runs, so HA immediately shows the
+  correct model string. TypeLabel only overrides if the reply has a
+  known tag; unknown tags no longer replace the good value with a
+  "TagID <n>" placeholder.
+
+## 0.1.36 — 2026-04-18
+
+### Internal
+- Force rebuild to ensure the 40-byte TypeLabel parser is in the image.
+
+## 0.1.35 — 2026-04-18
+
+### Fixed
+- **TypeLabel records are 40 bytes** (not the standard 28), with 8
+  attribute slots at offsets 8..40. Tag id is in low 24 bits, high byte
+  0x01 marks selected, 0xFE is end-of-list. Was previously reading
+  `u32_value_28(offset 16)` which produced garbage like "TagID 842084913".
+- **status_text table expanded to 36 entries** sourced from SBFspot
+  TagListEN-US.txt (operation health + grid relay + common faults).
+
+## 0.1.34 — 2026-04-18
+
+### Added
+- **Inverter Model sensor** — publishes `type_label_text(tag)` lookup
+  result from the TypeLabel query. New diagnostic entity in HA.
+  Falls through to `TagID <n>` for unknown tag ids.
+
 ## 0.1.33 — 2026-04-18
 
 ### Fixed
