@@ -257,7 +257,10 @@ async fn run_inverter(
             metrics.handshake_errors_total.get_or_create(&lbl).inc();
             error!(slot = %inv_cfg.slot, error = %e, "handshake/logon failed");
             let _ = session.close().await;
-            tokio::time::sleep(backoff).await;
+            // Give the inverter time to fully tear down session state before
+            // we reconnect. Repeated reconnects within a few seconds trigger
+            // retcode 0x0001 ("session conflict") on the next logon.
+            tokio::time::sleep(Duration::from_secs(5)).await;
             backoff = (backoff * 2).min(Duration::from_secs(60));
             continue;
         }

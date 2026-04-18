@@ -225,6 +225,24 @@ impl<T: Transport> Session<T> {
         self.state = SessionState::Handshaking;
         debug!(app_serial = self.app_serial, "starting SMA BT handshake");
 
+        // ── Step 0: send "ver\r\n" discovery packet.
+        //
+        // SBFspot's MIS path sends this first (SBFspot.cpp:432). The
+        // single-inverter path doesn't, but our user's network has 2
+        // inverters sharing the same NetID so we need MIS-style init.
+        // Byte-exact frame validated by `frame_builder_matches_captured_
+        // discovery_packet` against 0000-send.hex.
+        let ver_wire = FrameBuilder::new_with_kind(
+            FrameKind::L1Only,
+            [0u8; 6],               // src = zeros (matches capture)
+            [1, 0, 0, 0, 0, 0],     // dst = "1.0.0" version
+            0x0201,
+        )
+        .extend(b"ver\r\n")
+        .build();
+        self.transport.send_frame(&ver_wire).await?;
+        debug!("ver\\r\\n sent (MIS discovery)");
+
         // ── Step 1: recv hello (spontaneous broadcast from inverter)
         let hello_bytes = self
             .transport
