@@ -107,13 +107,18 @@ const U32_NAN: u32 = 0xFFFF_FFFF;
 /// u64 NaN sentinel.
 const U64_NAN: u64 = 0x8000_0000_0000_0000;
 
-/// Iterate 28-byte records over the records region, calling `f` on each
-/// `(lri, datetime, rec_slice)`.
+/// Iterate spot-value records over the records region. Records are usually
+/// 28 bytes but the inverter sometimes truncates the last one (observed:
+/// SpotDcVoltage second record = 20 bytes, dropping the trailing flag
+/// longwords). Minimum useful record is 20 bytes (code + dt + value slot).
 fn for_each_28_record<F: FnMut(u32, u32, &[u8])>(body: &[u8], mut f: F) {
     let region = records_region(body);
-    let stride = 28;
+    const MIN: usize = 20;
+    const MAX: usize = 28;
     let mut i = 0;
-    while i + stride <= region.len() {
+    while i + MIN <= region.len() {
+        let remaining = region.len() - i;
+        let stride = if remaining >= MAX { MAX } else { MIN };
         let rec = &region[i..i + stride];
         let code = LittleEndian::read_u32(&rec[0..4]);
         let dt = LittleEndian::read_u32(&rec[4..8]);
