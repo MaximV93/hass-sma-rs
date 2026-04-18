@@ -391,6 +391,7 @@ async fn run_inverter(
             // parse returned None: same — keep config model.
         }
 
+        let session_start = chrono::Utc::now();
         let mut ticker = tokio::time::interval(inv_cfg.poll_interval);
         let mut poll_count: u32 = 0;
         loop {
@@ -435,6 +436,8 @@ async fn run_inverter(
                 metrics.last_successful_poll_unix.get_or_create(&lbl).set(now.timestamp());
                 let _ = publisher.publish_value(&identity, "last_poll", now.to_rfc3339()).await;
                 let _ = publisher.publish_value(&identity, "poll_status", "ok").await;
+                let uptime_s = (now - session_start).num_seconds();
+                let _ = publisher.publish_value(&identity, "session_uptime", uptime_s).await;
             } else {
                 let _ = publisher.publish_value(&identity, "poll_status", "error").await;
                 break; // inner loop → reconnect

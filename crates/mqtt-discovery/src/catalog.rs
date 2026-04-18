@@ -277,6 +277,15 @@ pub fn sensor_catalog() -> &'static [SensorConfig] {
             diagnostic: true,
         },
         SensorConfig {
+            name: "Session Uptime",
+            key: "session_uptime",
+            device_class: Some("duration"),
+            state_class: Some("measurement"),
+            unit: Some("s"),
+            icon: "mdi:timer-outline",
+            diagnostic: true,
+        },
+        SensorConfig {
             name: "Last Poll",
             key: "last_poll",
             device_class: Some("timestamp"),
