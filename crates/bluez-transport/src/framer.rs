@@ -72,8 +72,7 @@ impl FrameReader {
                 let expected_cks = FRAME_DELIMITER ^ len_lo ^ len_hi;
 
                 let valid = hdr_cks == expected_cks
-                    && declared >= MIN_FRAME_LEN
-                    && declared <= MAX_FRAME_LEN;
+                    && (MIN_FRAME_LEN..=MAX_FRAME_LEN).contains(&declared);
 
                 if !valid {
                     // Resync: drop the leading 0x7E and replay the remaining
@@ -128,7 +127,7 @@ mod tests {
         let hdr_cks = FRAME_DELIMITER ^ len_lo ^ len_hi;
         let mut out = vec![FRAME_DELIMITER, len_lo, len_hi, hdr_cks];
         // 6 local + 6 dest + 2 ctrl = 14 bytes of zeros
-        out.extend(std::iter::repeat(0).take(14));
+        out.extend(std::iter::repeat_n(0, 14));
         out.extend_from_slice(payload);
         assert_eq!(out.len(), total);
         out
@@ -143,7 +142,7 @@ mod tests {
         let len_hi = ((total >> 8) & 0xFF) as u8;
         let hdr_cks = FRAME_DELIMITER ^ len_lo ^ len_hi;
         let mut out = vec![FRAME_DELIMITER, len_lo, len_hi, hdr_cks];
-        out.extend(std::iter::repeat(0).take(14));
+        out.extend(std::iter::repeat_n(0, 14));
         out.extend_from_slice(body);
         out.push(FRAME_DELIMITER);
         assert_eq!(out.len(), total);

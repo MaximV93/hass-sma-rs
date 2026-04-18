@@ -401,7 +401,7 @@ async fn run_inverter(
 
             // Parallel-run: every `yield_every` polls, drop the BT session
             // for `yield_duration` so another SMA integration can poll.
-            if inv_cfg.yield_every > 0 && poll_count % inv_cfg.yield_every == 0 {
+            if inv_cfg.yield_every > 0 && poll_count.is_multiple_of(inv_cfg.yield_every) {
                 info!(
                     slot = %inv_cfg.slot,
                     duration_secs = inv_cfg.yield_duration.as_secs(),
