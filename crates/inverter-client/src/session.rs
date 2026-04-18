@@ -343,38 +343,91 @@ impl<T: Transport> Session<T> {
         self.transport.send_frame(&frame_bytes).await?;
         debug!(pkt_id, now_epoch, "sent logon");
 
-        // ── Step 7: recv logon reply — match on sent pkt_id
-        let (_logon_bytes, logon_reply) = self.recv_l2_with_pkt_id(pkt_id, "logon").await?;
-
-        match logon_reply.error_code {
-            0 => {}
-            other => {
-                let hex: String = logon_reply
-                    .body
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                tracing::warn!(
-                    code = format!("0x{:04x}", other),
-                    susy = logon_reply.app_susy_id,
-                    serial = logon_reply.app_serial,
-                    body = %hex,
-                    "logon rejected — full reply body for diagnostics"
+        // ── Step 7: recv logon reply.
+        //
+        // In a multi-inverter BT network (NetID>1), the logon broadcast
+        // reaches every device. Each replies. We accept the FIRST reply with
+        // matching pkt_id AND retcode=0 — SBFspot does the same via its
+        // `validPcktID` loop. A single inverter returning 0x0001 doesn't
+        // necessarily mean logon failed globally; it can mean "this device
+        // isn't responding to that pkt_id's intended target".
+        let logon_reply = {
+            let mut last_reject: Option<L2Reply> = None;
+            let mut logged_in: Option<L2Reply> = None;
+            for _ in 0..16 {
+                let bytes = match self.recv_until_l1_ctrl(0x0001, "logon").await {
+                    Ok(b) => b,
+                    Err(_) => break,
+                };
+                let frame = match Frame::parse(&bytes) {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+                let (hdr, data) = match decode_l2(&frame.payload) {
+                    Some(x) => x,
+                    None => continue,
+                };
+                if hdr.pkt_id != pkt_id {
+                    continue;
+                }
+                let reply = L2Reply {
+                    pkt_id: hdr.pkt_id,
+                    error_code: hdr.error_code,
+                    app_susy_id: hdr.app_susy_id,
+                    app_serial: hdr.app_serial,
+                    body: data.to_vec(),
+                };
+                if reply.error_code == 0 {
+                    logged_in = Some(reply);
+                    break;
+                }
+                debug!(
+                    code = format!("0x{:04x}", reply.error_code),
+                    susy = reply.app_susy_id,
+                    serial = reply.app_serial,
+                    "logon reply rejected by this device — waiting for another"
                 );
-                return Err(SessionError::LogonFailed { code: other });
+                last_reject = Some(reply);
             }
-        }
+            match logged_in {
+                Some(r) => r,
+                None => {
+                    if let Some(rej) = last_reject.as_ref() {
+                        let hex: String = rej
+                            .body
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        tracing::warn!(
+                            code = format!("0x{:04x}", rej.error_code),
+                            susy = rej.app_susy_id,
+                            serial = rej.app_serial,
+                            body = %hex,
+                            "no inverter accepted logon — last reject shown"
+                        );
+                        if rej.error_code == 0x0100 {
+                            return Err(SessionError::LogonFailed { code: 0x0100 });
+                        }
+                        return Err(SessionError::LogonFailed { code: rej.error_code });
+                    }
+                    return Err(SessionError::Silent { phase: "logon" });
+                }
+            }
+        };
 
+        // If the accepting device isn't the one we identified in init, that's
+        // OK in a MIS network — the logon broadcast was accepted by a peer.
+        // Queries still target self.inverter_{susy,serial} set from init.
         if logon_reply.app_susy_id != self.inverter_susy_id
             || logon_reply.app_serial != self.inverter_serial
         {
-            warn!(
+            debug!(
                 init_susy = self.inverter_susy_id,
                 init_serial = self.inverter_serial,
                 logon_susy = logon_reply.app_susy_id,
                 logon_serial = logon_reply.app_serial,
-                "logon reply identity mismatch"
+                "logon accepted by peer (MIS network)"
             );
         }
         self.state = SessionState::LoggedIn;
