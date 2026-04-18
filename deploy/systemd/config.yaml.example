@@ -1,0 +1,34 @@
+# hass-sma-rs standalone config — copy to /etc/hass-sma-rs/config.yaml
+# Same schema as the HA addon options block.
+
+mqtt:
+  host: mqtt.example.local
+  port: 1883
+  user: hassma
+  password: "<broker password>"
+  client_id: hass-sma-rs
+  discovery_prefix: homeassistant
+  state_prefix: hass-sma
+
+inverters:
+  - slot: roof-north
+    bt_address: "00:80:25:AA:BB:CC"
+    password: "<inverter user password>"
+    poll_interval: 60s
+    model: "SB 3000HF-30"
+    firmware: "02.30.06.R"
+    mis_enabled: false
+
+# Optional HCI adapter selection. Omit to let BlueZ pick hci0 by default.
+# local_bt_address: "B8:27:EB:XX:XX:XX"
+
+# How long to wait for each RFCOMM frame before timing out.
+rfcomm_timeout: 15s
+
+# Prometheus exposition endpoint. Defaults to :9090.
+metrics_addr: "0.0.0.0:9090"
+
+# Optional long-term archive. Pick CSV (zero-config) OR TimescaleDB.
+# archive:
+#   csv_dir: /var/lib/hass-sma-rs/archive
+#   # timescale_url: "postgres://hassma:secret@timescale.example.local/hassma"

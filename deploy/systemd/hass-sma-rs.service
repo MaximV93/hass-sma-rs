@@ -1,5 +1,5 @@
 [Unit]
-Description=hass-sma-rs — SMA Sunny Boy BT daemon
+Description=hass-sma-rs — SMA Sunny Boy BT daemon (Rust rewrite)
 Documentation=https://github.com/MaximV93/hass-sma-rs
 After=network-online.target bluetooth.service
 Wants=network-online.target bluetooth.service
@@ -11,14 +11,55 @@ Restart=on-failure
 RestartSec=10
 User=hassma
 Group=hassma
-# BlueZ raw sockets need CAP_NET_RAW + CAP_NET_ADMIN.
+WorkingDirectory=/var/lib/hass-sma-rs
+
+# Prometheus /metrics + BT RFCOMM both need specific capabilities.
+# CAP_NET_RAW for AF_BLUETOOTH raw sockets; CAP_NET_ADMIN for hci config.
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+
+# Hardening (systemd.exec(5)):
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
 PrivateTmp=true
+PrivateDevices=false   # need BT device access via /dev/rfcomm*
+PrivateUsers=true
 DevicePolicy=closed
+DeviceAllow=/dev/rfcomm0 rw
+
+# Only allow read/write to the archive dir (if configured).
+ReadWritePaths=/var/lib/hass-sma-rs
+
+# Network: allow only local RFCOMM + MQTT broker egress.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_BLUETOOTH
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+# Syscall filter — deny unusual calls.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @debug @cpu-emulation
+
+# Memory / file descriptor limits.
+LimitNOFILE=4096
+MemoryMax=128M
+
+# Logging through journald with structured fields.
+StandardOutput=journal
+StandardError=journal
+
+# Give the broker a moment to come up first.
+ExecStartPre=/bin/sleep 2
 
 [Install]
 WantedBy=multi-user.target
