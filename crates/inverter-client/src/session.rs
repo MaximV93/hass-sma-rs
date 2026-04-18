@@ -454,6 +454,11 @@ impl<T: Transport> Session<T> {
                     app_serial: hdr.app_serial,
                     body: data.to_vec(),
                 };
+                // 0x0001 has been observed as "session already active" —
+                // not a hard rejection. If both inverters return 0x0001 we
+                // proceed with queries; if queries succeed, the session is
+                // effectively logged-in. 0x0100 is still hard-fail (bad
+                // password). Anything else: continue waiting.
                 if reply.error_code == 0 {
                     logged_in = Some(reply);
                     break;
@@ -470,22 +475,35 @@ impl<T: Transport> Session<T> {
                 Some(r) => r,
                 None => {
                     if let Some(rej) = last_reject.as_ref() {
-                        let hex: String = rej
-                            .body
-                            .iter()
-                            .map(|b| format!("{:02x}", b))
-                            .collect::<Vec<_>>()
-                            .join(" ");
+                        // 0x0100 is always invalid-password (hard fail).
+                        if rej.error_code == 0x0100 {
+                            tracing::warn!(
+                                susy = rej.app_susy_id,
+                                serial = rej.app_serial,
+                                "logon rejected: invalid password"
+                            );
+                            return Err(SessionError::LogonFailed { code: 0x0100 });
+                        }
+                        // 0x0001 is often "session already active" — proceed
+                        // optimistically. If queries fail, the poll loop will
+                        // reconnect.
+                        if rej.error_code == 0x0001 {
+                            tracing::info!(
+                                susy = rej.app_susy_id,
+                                serial = rej.app_serial,
+                                "logon returned 0x0001 — proceeding optimistically"
+                            );
+                            return Ok({
+                                self.state = SessionState::LoggedIn;
+                                ()
+                            });
+                        }
                         tracing::warn!(
                             code = format!("0x{:04x}", rej.error_code),
                             susy = rej.app_susy_id,
                             serial = rej.app_serial,
-                            body = %hex,
-                            "no inverter accepted logon — last reject shown"
+                            "no inverter accepted logon"
                         );
-                        if rej.error_code == 0x0100 {
-                            return Err(SessionError::LogonFailed { code: 0x0100 });
-                        }
                         return Err(SessionError::LogonFailed { code: rej.error_code });
                     }
                     return Err(SessionError::Silent { phase: "logon" });
