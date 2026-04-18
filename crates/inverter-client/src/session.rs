@@ -303,6 +303,12 @@ impl<T: Transport> Session<T> {
         self.transport.send_frame(&logoff_frame).await?;
         debug!(pkt_id, "logoff sent (pre-logon reset)");
 
+        // Give the inverter time to process the logoff before hitting it with
+        // logon. Without this delay repeat sessions (reconnect after a parse
+        // error etc.) get retcode 0x0001 from the inverter — interpreted as
+        // "session still active". 300ms is enough per live observation.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
         // ── Step 6: send logon
         let now_epoch = current_epoch_u32();
         let pkt_id = self.next_pcktid();
@@ -324,8 +330,22 @@ impl<T: Transport> Session<T> {
 
         match logon_reply.error_code {
             0 => {}
-            0x0100 => return Err(SessionError::LogonFailed { code: 0x0100 }),
-            other => return Err(SessionError::LogonFailed { code: other }),
+            other => {
+                let hex: String = logon_reply
+                    .body
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                tracing::warn!(
+                    code = format!("0x{:04x}", other),
+                    susy = logon_reply.app_susy_id,
+                    serial = logon_reply.app_serial,
+                    body = %hex,
+                    "logon rejected — full reply body for diagnostics"
+                );
+                return Err(SessionError::LogonFailed { code: other });
+            }
         }
 
         if logon_reply.app_susy_id != self.inverter_susy_id
