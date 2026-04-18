@@ -1,0 +1,173 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "title": "hass-sma-rs solar monitor",
+  "uid": "hass-sma-rs",
+  "schemaVersion": 38,
+  "version": 1,
+  "tags": ["solar", "sma", "inverter"],
+  "timezone": "",
+  "time": { "from": "now-24h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "slot",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(sma_ac_power_watts, slot)",
+        "refresh": 2,
+        "includeAll": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "AC Output Power",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sma_ac_power_watts{slot=~\"$slot\"}", "legendFormat": "{{slot}}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "watt", "color": { "mode": "palette-classic" } }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Per-string DC Power",
+      "type": "timeseries",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "sma_dc_power_s1_watts{slot=~\"$slot\"}", "legendFormat": "{{slot}} S1", "refId": "A" },
+        { "expr": "sma_dc_power_s2_watts{slot=~\"$slot\"}", "legendFormat": "{{slot}} S2", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "watt" } }
+    },
+    {
+      "id": 3,
+      "title": "Energy today (Wh)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 9 },
+      "targets": [
+        { "expr": "sma_energy_today_wh{slot=~\"$slot\"}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "watth" } }
+    },
+    {
+      "id": 4,
+      "title": "Energy lifetime (Wh)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 9 },
+      "targets": [
+        { "expr": "sma_energy_lifetime_wh{slot=~\"$slot\"}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "watth" } }
+    },
+    {
+      "id": 5,
+      "title": "Inverter temperature",
+      "type": "timeseries",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 9 },
+      "targets": [
+        { "expr": "sma_inverter_temperature_c{slot=~\"$slot\"}", "legendFormat": "{{slot}}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "celsius" } }
+    },
+    {
+      "id": 6,
+      "title": "Grid frequency",
+      "type": "timeseries",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 9 },
+      "targets": [
+        { "expr": "sma_grid_frequency_hz{slot=~\"$slot\"}", "legendFormat": "{{slot}}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "hertz", "min": 49.5, "max": 50.5 }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Inverter awake (1 = online)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 13 },
+      "targets": [
+        { "expr": "sma_inverter_awake{slot=~\"$slot\"}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "red" },
+              { "value": 1, "color": "green" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Poll errors (last hour)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 13 },
+      "targets": [
+        { "expr": "increase(sma_poll_errors_total{slot=~\"$slot\"}[1h])", "refId": "A" }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "BT reconnects (last hour)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 13 },
+      "targets": [
+        { "expr": "increase(sma_bt_reconnects_total{slot=~\"$slot\"}[1h])", "refId": "A" }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Seconds since last successful poll",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 13 },
+      "targets": [
+        { "expr": "time() - sma_last_successful_poll_unix{slot=~\"$slot\"}", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": null, "color": "green" },
+              { "value": 180, "color": "yellow" },
+              { "value": 900, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "AC voltage L1",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 17 },
+      "targets": [
+        { "expr": "sma_ac_voltage_l1{slot=~\"$slot\"}", "legendFormat": "{{slot}} L1", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "volt", "min": 220, "max": 250 }
+      }
+    },
+    {
+      "id": 12,
+      "title": "AC current L1",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 17 },
+      "targets": [
+        { "expr": "sma_ac_current_l1{slot=~\"$slot\"}", "legendFormat": "{{slot}} L1", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "amp" } }
+    }
+  ]
+}
