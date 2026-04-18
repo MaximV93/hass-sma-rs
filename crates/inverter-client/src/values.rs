@@ -410,27 +410,41 @@ pub fn status_text(tag: u32) -> &'static str {
     }
 }
 
-/// Parse a SoftwareVersion reply: packed `(release, major, minor, build)` u32.
+/// Parse a SoftwareVersion reply: packed u32 at record offset 24 (SBFspot
+/// `get_long(recptr + 24)`). Major/minor are BCD-encoded bytes
+/// (e.g. 0x30 → "30", not hex "48" or "30" as decimal).
+///
+/// Layout of the u32 (little-endian on wire):
+///   byte0 = Vtype    (low nibble = index into "NEABRS")
+///   byte1 = Vbuild   (plain decimal)
+///   byte2 = Vminor   (BCD: '0'+hi, '0'+lo)
+///   byte3 = Vmajor   (BCD)
+///
+/// Example: 0x02300604 → "02.30.06.R"
 pub fn parse_software_version(body: &[u8]) -> Option<String> {
     let mut out = None;
     for_each_28_record(body, |lri, _dt, rec| {
-        if lri == lri::SW_VERSION {
-            if let Some(v) = u32_value_28(rec) {
-                let build = (v & 0xFF) as u8;
-                let minor = ((v >> 8) & 0xFF) as u8;
-                let major = ((v >> 16) & 0xFF) as u8;
-                let rel = ((v >> 24) & 0xFF) as u8;
-                let rel_char = match rel {
-                    0 => 'N',
-                    1 => 'E',
-                    2 => 'A',
-                    3 => 'B',
-                    4 => 'R',
-                    5 => 'S',
-                    _ => '?',
-                };
-                out = Some(format!("{:02}.{:02}.{:02}.{}", major, minor, build, rel_char));
+        if lri == lri::SW_VERSION && rec.len() >= 28 {
+            let v = LittleEndian::read_u32(&rec[24..28]);
+            if v == U32_NAN || v == 0 {
+                return;
             }
+            let vtype = (v & 0xFF) as u8;
+            let vbuild = ((v >> 8) & 0xFF) as u8;
+            let vminor = ((v >> 16) & 0xFF) as u8;
+            let vmajor = ((v >> 24) & 0xFF) as u8;
+            let type_char = if (vtype as usize) < 6 {
+                "NEABRS".as_bytes()[vtype as usize] as char
+            } else {
+                '?'
+            };
+            // BCD: high-nibble and low-nibble as decimal digits.
+            let bcd_major = format!("{}{}", vmajor >> 4, vmajor & 0x0F);
+            let bcd_minor = format!("{}{}", vminor >> 4, vminor & 0x0F);
+            out = Some(format!(
+                "{}.{}.{:02}.{}",
+                bcd_major, bcd_minor, vbuild, type_char
+            ));
         }
     });
     out
@@ -532,8 +546,13 @@ mod tests {
 
     #[test]
     fn parse_software_version_string() {
-        let packed: i32 = ((4i32) << 24) | (2 << 16) | (30 << 8) | 6;
-        let rec = build_28_record(0x00_82_34_01, 0, packed);
+        // Real capture from zolder: `04 06 30 02` at record offset 24.
+        // vtype=0x04 → 'R', vbuild=0x06, vminor=0x30 (BCD→"30"),
+        // vmajor=0x02 (BCD→"02") → "02.30.06.R".
+        let mut rec = [0u8; 28];
+        LittleEndian::write_u32(&mut rec[0..4], 0x00_82_34_01);
+        // record offset 24 = value slot for SW version
+        rec[24..28].copy_from_slice(&[0x04, 0x06, 0x30, 0x02]);
         let body = with_prefix(&rec);
         let v = parse_software_version(&body).unwrap();
         assert_eq!(v, "02.30.06.R");
