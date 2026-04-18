@@ -3,6 +3,37 @@
 All notable changes to hass-sma-rs are tracked here. This project follows
 semantic-ish versioning; pre-1.0 is rapid iteration.
 
+## 0.1.40 — 2026-04-19 (overnight work)
+
+### Added
+- **Session Uptime** diagnostic sensor (28 total) — seconds since last
+  successful logon. Useful for "detect session flapping" alerts.
+- **Archive sink** (opt-in via `archive:` config) — TimescaleDB OR CSV.
+  CSV sink is zero-config, writes one file per (slot, YYYY-MM-DD).
+  TimescaleDB reuses the existing hypertable + retention + continuous
+  aggregate schema.
+- **Grafana alerts** — 7 unified-alerting rules (`docs/grafana-alerts.yaml`)
+  covering daylight offline, stale poll, handshake rate, string
+  imbalance, overheating, grid frequency, reconnect storm.
+- **Hardened systemd unit** — full `systemd.exec(5)` sandboxing with
+  PrivateUsers, SystemCallFilter, DeviceAllow-list, MemoryMax=128M.
+  Install docs at `deploy/systemd/README.md`.
+- **ADR docs** — 4 architecture decision records (protocol narrative,
+  persistent session, Rust choice, event log deferral) with index
+  at `docs/adr/README.md`.
+- **Frame parser fuzzing** — 6 proptest properties with 1536 random
+  iterations per run. `parse_never_panics_on_random_bytes`, length
+  mutation safety, truncation safety, header checksum robustness.
+  62 workspace tests (up from 54).
+
+### Fixed
+- Clippy `-D warnings` clean under Rust 1.95 (repeat_n,
+  is_multiple_of, RangeInclusive::contains suggestions applied).
+
+## 0.1.39 — 2026-04-19
+Same content as 0.1.40 — bump triggered rebuild after storage crate
+was wired into the daemon's main.rs.
+
 ## 0.1.38 — 2026-04-18
 
 ### Added
