@@ -15,6 +15,8 @@ use crate::schema::CREATE_SCHEMA;
 pub enum StorageError {
     #[error("sqlx error: {0}")]
     Sqlx(#[from] sqlx::Error),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;

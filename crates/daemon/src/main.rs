@@ -18,7 +18,9 @@ use sma_bt_protocol::{auth::UserGroup, commands::QueryKind};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
+use storage::{CsvSink, ReadingSink, StorageWriter};
 use telemetry::{init_tracing, metrics::InverterLabels, serve_metrics, MetricsRegistry};
 use tokio::signal;
 use tracing::{error, info, warn};
@@ -29,6 +31,35 @@ struct Cli {
     /// Path to config YAML.
     #[arg(short, long, default_value = "/data/options.yaml")]
     config: PathBuf,
+}
+
+/// Optional long-term archive sink. Wrapped so call sites don't need
+/// to know whether archiving is enabled — `record()` is a no-op when
+/// the inner sink is None.
+#[derive(Clone)]
+struct Archiver {
+    inner: Option<Arc<dyn ReadingSink>>,
+}
+
+impl Archiver {
+    fn disabled() -> Self {
+        Self { inner: None }
+    }
+
+    fn new(sink: Arc<dyn ReadingSink>) -> Self {
+        Self { inner: Some(sink) }
+    }
+
+    /// Fire-and-forget archive write. Errors are logged + dropped so
+    /// archive failures never stall the poll loop.
+    async fn record(&self, slot: &str, serial: i64, metric: &str, value: f64) {
+        if let Some(sink) = &self.inner {
+            let now = chrono::Utc::now();
+            if let Err(e) = sink.write(now, slot, serial, metric, value).await {
+                tracing::warn!(slot, metric, error = %e, "archive write failed");
+            }
+        }
+    }
 }
 
 /// Dispatch a query reply to the right parser + MQTT publish path.
@@ -42,6 +73,7 @@ async fn publish_query_result(
     identity: &InverterIdentity,
     metrics: &MetricsRegistry,
     lbl: &InverterLabels,
+    archiver: &Archiver,
 ) {
     match kind {
         QueryKind::SpotAcTotalPower => {
@@ -49,6 +81,9 @@ async fn publish_query_result(
             if let Some(w) = r.pac_total_w {
                 metrics.ac_power_watts.get_or_create(lbl).set(w as f64);
                 let _ = publisher.publish_value(identity, "ac_power", w).await;
+                archiver
+                    .record(&identity.slot, identity.serial as i64, "ac_power", w as f64)
+                    .await;
             }
         }
         QueryKind::SpotAcPower => {
@@ -119,11 +154,22 @@ async fn publish_query_result(
                 let _ = publisher
                     .publish_value(identity, "energy_today", format!("{:.3}", wh as f64 / 1000.0))
                     .await;
+                archiver
+                    .record(&identity.slot, identity.serial as i64, "energy_today_wh", wh as f64)
+                    .await;
             }
             if let Some(wh) = total {
                 metrics.energy_lifetime_wh.get_or_create(lbl).set(wh as f64);
                 let _ = publisher
                     .publish_value(identity, "energy_lifetime", format!("{:.3}", wh as f64 / 1000.0))
+                    .await;
+                archiver
+                    .record(
+                        &identity.slot,
+                        identity.serial as i64,
+                        "energy_lifetime_wh",
+                        wh as f64,
+                    )
                     .await;
             }
         }
@@ -144,12 +190,18 @@ async fn publish_query_result(
             if let Some(c) = parse_inverter_temperature(body) {
                 metrics.inverter_temperature_c.get_or_create(lbl).set(c as f64);
                 let _ = publisher.publish_value(identity, "temperature", format!("{:.2}", c)).await;
+                archiver
+                    .record(&identity.slot, identity.serial as i64, "temperature_c", c as f64)
+                    .await;
             }
         }
         QueryKind::SpotGridFrequency => {
             if let Some(hz) = parse_grid_frequency(body) {
                 metrics.grid_frequency_hz.get_or_create(lbl).set(hz as f64);
                 let _ = publisher.publish_value(identity, "grid_frequency", format!("{:.2}", hz)).await;
+                archiver
+                    .record(&identity.slot, identity.serial as i64, "grid_frequency_hz", hz as f64)
+                    .await;
             }
         }
         QueryKind::DeviceStatus => {
@@ -175,6 +227,7 @@ async fn run_inverter(
     publisher: DiscoveryPublisher,
     rfcomm_timeout: Duration,
     metrics: MetricsRegistry,
+    archiver: Archiver,
 ) -> Result<()> {
     let lbl = InverterLabels {
         slot: inv_cfg.slot.clone(),
@@ -362,7 +415,7 @@ async fn run_inverter(
 
             for kind in per_tick_queries.iter() {
                 match session.query(*kind).await {
-                    Ok(body) => publish_query_result(*kind, &body, &publisher, &identity, &metrics, &lbl).await,
+                    Ok(body) => publish_query_result(*kind, &body, &publisher, &identity, &metrics, &lbl, &archiver).await,
                     Err(e) => {
                         metrics.poll_errors_total.get_or_create(&lbl).inc();
                         warn!(
@@ -435,19 +488,48 @@ async fn main() -> Result<()> {
         });
     }
 
+    // Build archive sink once (shared across all inverter tasks).
+    let archiver = match cfg.archive.as_ref() {
+        Some(a) => {
+            // Timescale takes precedence if both are set.
+            if let Some(url) = &a.timescale_url {
+                info!(host = %url.split('@').next_back().unwrap_or(""), "connecting TimescaleDB sink");
+                match StorageWriter::connect(url).await {
+                    Ok(w) => {
+                        if let Err(e) = w.init_schema().await {
+                            warn!(error = %e, "timescale init_schema failed; continuing without archive");
+                            Archiver::disabled()
+                        } else {
+                            Archiver::new(Arc::new(w))
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "timescale connect failed; no archive");
+                        Archiver::disabled()
+                    }
+                }
+            } else if let Some(dir) = &a.csv_dir {
+                info!(dir, "CSV archive sink enabled");
+                Archiver::new(Arc::new(CsvSink::new(dir)))
+            } else {
+                Archiver::disabled()
+            }
+        }
+        None => Archiver::disabled(),
+    };
+
     let mut tasks = Vec::new();
     for inv in cfg.inverters.iter() {
         let inv_clone = inv.clone();
         let mut pub_cfg = mqtt_base.clone();
         pub_cfg.client_id = format!("{}-{}", mqtt_base.client_id, inv.slot);
-        // LWT topic: when this client disconnects uncleanly, broker publishes
-        // "offline" here → HA flips every sensor on this inverter to unavailable.
         let lwt_topic = format!("{}/{}/availability", pub_cfg.state_prefix, inv.slot);
         let publisher = DiscoveryPublisher::connect_with_lwt(pub_cfg, Some(lwt_topic)).await;
         let timeout = cfg.rfcomm_timeout;
         let m = metrics.clone();
+        let arch = archiver.clone();
         tasks.push(tokio::spawn(async move {
-            if let Err(e) = run_inverter(inv_clone, local_bt, publisher, timeout, m).await {
+            if let Err(e) = run_inverter(inv_clone, local_bt, publisher, timeout, m, arch).await {
                 error!(error = %e, "inverter task exited with error");
             }
         }));

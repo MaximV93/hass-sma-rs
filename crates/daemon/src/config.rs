@@ -38,6 +38,24 @@ pub struct DaemonConfig {
     /// Prometheus /metrics endpoint bind address. Default "0.0.0.0:9090".
     #[serde(default = "default_metrics_addr")]
     pub metrics_addr: String,
+    /// Optional long-term archive sink. If unset, no archive is written.
+    /// CSV sink is zero-config; TimescaleDB requires a live Postgres.
+    #[serde(default)]
+    pub archive: Option<ArchiveCfg>,
+}
+
+/// Long-term storage configuration. Enable either csv_dir or timescale_url;
+/// if both are set, timescale takes precedence.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ArchiveCfg {
+    /// Path under which to append one CSV file per (slot, date). HA
+    /// addon-friendly default: "/share/hass-sma-rs".
+    #[serde(default)]
+    pub csv_dir: Option<String>,
+    /// `postgres://user:pass@host/db` — connects to a live TimescaleDB
+    /// instance. `init_schema` runs on startup so a fresh DB works.
+    #[serde(default)]
+    pub timescale_url: Option<String>,
 }
 
 fn default_metrics_addr() -> String {

@@ -34,8 +34,52 @@
 //!     schedule_interval => INTERVAL '30 minutes');
 //! ```
 
+pub mod csv_sink;
 pub mod schema;
 pub mod writer;
 
+pub use csv_sink::CsvSink;
 pub use schema::CREATE_SCHEMA;
 pub use writer::{StorageError, StorageWriter};
+
+/// Trait that both TimescaleDB and CSV sinks implement. Keeps the
+/// daemon's storage wiring abstract over the backend choice.
+#[async_trait::async_trait]
+pub trait ReadingSink: Send + Sync {
+    async fn write(
+        &self,
+        time: chrono::DateTime<chrono::Utc>,
+        slot: &str,
+        serial: i64,
+        metric: &str,
+        value: f64,
+    ) -> Result<(), StorageError>;
+}
+
+#[async_trait::async_trait]
+impl ReadingSink for StorageWriter {
+    async fn write(
+        &self,
+        time: chrono::DateTime<chrono::Utc>,
+        slot: &str,
+        serial: i64,
+        metric: &str,
+        value: f64,
+    ) -> Result<(), StorageError> {
+        self.insert(time, slot, serial, metric, value).await
+    }
+}
+
+#[async_trait::async_trait]
+impl ReadingSink for CsvSink {
+    async fn write(
+        &self,
+        time: chrono::DateTime<chrono::Utc>,
+        slot: &str,
+        serial: i64,
+        metric: &str,
+        value: f64,
+    ) -> Result<(), StorageError> {
+        self.append(time, slot, serial, metric, value).await
+    }
+}

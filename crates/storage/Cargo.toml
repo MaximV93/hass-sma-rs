@@ -8,10 +8,12 @@ description = "TimescaleDB writer for per-poll inverter readings, with optional 
 [dependencies]
 thiserror.workspace = true
 tracing.workspace = true
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync", "fs", "io-util"] }
 sqlx = { workspace = true, features = ["postgres", "runtime-tokio", "time", "macros", "chrono"] }
 chrono.workspace = true
 serde.workspace = true
+async-trait = "0.1"
 
 [dev-dependencies]
 tokio.workspace = true
+tempfile = "3"
