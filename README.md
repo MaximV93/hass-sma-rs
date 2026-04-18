@@ -1,74 +1,120 @@
 # hass-sma-rs
 
-Clean-room Rust rewrite of the SMA Sunny Boy BT-only integration for Home
-Assistant. Replaces the bash + SBFspot-based fork at
-[MaximV93/hassio-addons](https://github.com/MaximV93/hassio-addons/tree/main/haos-sbfspot)
-incrementally while keeping the previous fork (`v-lastworking-2026.4.17.18`)
-as a parallel-run reference.
+[![CI](https://github.com/MaximV93/hass-sma-rs/actions/workflows/ci.yaml/badge.svg)](https://github.com/MaximV93/hass-sma-rs/actions/workflows/ci.yaml)
+![tests](https://img.shields.io/badge/tests-62%20green-brightgreen)
+![license](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue)
+![rust](https://img.shields.io/badge/rust-stable-orange)
+
+Clean-room Rust implementation of the SMA Sunny Boy Bluetooth
+integration for Home Assistant. Replaces the bash + SBFspot C++ stack
+with a single type-safe daemon.
+
+**Live since 2026-04-18.** 38+ addon versions iterated against a real
+SB 3000HF-30. 12 protocol bugs reverse-engineered and fixed with
+regression tests. 27 MQTT sensors + 15 Prometheus metrics per inverter.
 
 ## Why
 
-The fork works. It's also 500+ lines of bash wrapping a C++ binary whose BT
-session model forces 20-40s handshake per poll, makes sub-minute polling
-saturated, and leaves every edge case (hangs, BT stack corruption, retention,
-supply chain) as a patch on top.
+| | Stock SBFspot (C++) | haos-sbfspot (fork) | hass-sma-rs |
+|---|---|---|---|
+| BT session | reconnect per poll | reconnect per poll | **persistent** |
+| Handshake tax | ~5 s / poll | ~5 s / poll | 1 s **once** |
+| MQTT LWT | ❌ | ❌ | ✅ sensors flip `unavailable` on crash |
+| Sleep detection | ❌ | ❌ | ✅ adaptive backoff after sunset |
+| Metrics | ❌ | MQTT heartbeat | ✅ **15 Prometheus families** |
+| Parallel-run | ❌ | ❌ | ✅ `yield_every` window |
+| Tests | ❌ | bash smoke only | ✅ **62** unit + integration + fuzz |
+| Event log | ✅ | ✅ via MariaDB | ⏳ deferred — see [ADR 0004](docs/adr/0004-event-log-deferred.md) |
 
-Rust rewrite goals:
+Full matrix + measurement methodology: [docs/COMPARISON.md](docs/COMPARISON.md).
 
-- **Persistent BT sessions** — open once, keep alive, reconnect on failure.
-  Removes the handshake bottleneck that makes 5 s polling saturated today.
-- **Observable by construction** — `tracing` spans, Prometheus metrics, OTLP
-  traces as first-class, not MQTT-proxy-as-metrics.
-- **Testable by construction** — protocol in a pure-function crate; transport
-  behind a trait mock; integration tests replay captured wire traffic.
-- **Typed config + typed protocol** — no stringly-typed `jq` on
-  `options.json`, no shell-level string munging on wire frames.
-- **Single static binary** — distroless runtime, no Alpine + bashio + s6.
+## Quick start (HA addon)
 
-Non-goals: SMA Speedwire / Ethernet / Webconnect. HF-30 hardware is
-BT-only — this daemon is explicitly for that class of inverter.
+```
+Supervisor → Add-on store → ⋮ Repositories → Add
+https://github.com/MaximV93/hassio-addons
 
-## Layout
+Install "hass-sma-rs (Rust rewrite)" → Configure → Start.
+```
+
+Config skeleton:
+
+```yaml
+inverters:
+  - slot: zolder
+    bt_address: "00:80:25:AA:BB:CC"
+    password: "<inverter user password>"
+    poll_interval: 60s
+    model: "SB 3000HF-30"
+```
+
+## Quick start (standalone Linux)
+
+Raspberry Pi, Proxmox LXC, bare-metal homelab:
+
+```bash
+cargo build --release
+sudo install -m 755 target/release/hass-sma-daemon /usr/local/bin/
+sudo install -m 644 deploy/systemd/hass-sma-rs.service /etc/systemd/system/
+# edit /etc/hass-sma-rs/config.yaml
+sudo systemctl enable --now hass-sma-rs
+```
+
+Details: [deploy/systemd/README.md](deploy/systemd/README.md).
+
+## Architecture
 
 ```
 crates/
-  sma-bt-protocol/     # clean-room impl of the SMA BT wire protocol
-                       # (frames, FCS-16, byte stuffing, commands)
-  bluez-transport/     # RFCOMM socket wrapper + mock for tests
-  inverter-client/     # per-inverter state machine + session lifecycle
-  telemetry/           # tracing + prometheus + otlp setup
-  storage/             # TimescaleDB writer, MariaDB migration tool
-  mqtt-discovery/      # HA discovery publisher (owns all sensors)
-  daemon/              # main binary
+  sma-bt-protocol/     wire protocol: frames, FCS-16, byte stuffing,
+                       L2 packet header, command opcodes, authentication
+  bluez-transport/     AF_BLUETOOTH RFCOMM client + MockTransport + FrameReader
+  inverter-client/     Session FSM (Handshaking → Enumerating → LoggedIn → Polling)
+  mqtt-discovery/      HA MQTT discovery publisher (28-sensor catalog, LWT)
+  telemetry/           Prometheus /metrics + tracing JSON logs
+  storage/             TimescaleDB writer + CSV sink (optional)
+  daemon/              tokio-based per-inverter task runner (the binary)
+
 deploy/
-  addon/               # HA addon wrapper (Dockerfile + config.yaml)
-  systemd/             # standalone-mode unit file
+  addon/               HA addon wrapper (Dockerfile + config.yaml)
+  systemd/             standalone Linux unit file + install README
+
 docs/
-  adr/                 # architecture decision records
+  COMPARISON.md        three-way feature matrix
+  adr/                 architecture decision records (why persistent session,
+                       why Rust, why event log deferred)
+  grafana-dashboard.json
+  grafana-alerts.yaml
 ```
 
 ## Status
 
-**V5.1 scaffold.**
+**0.1.40**. Live at a production HA instance since 2026-04-18.
 
-- [x] Cargo workspace + stub crates
-- [x] `sma-bt-protocol`: frame encoder, parser, FCS-16, byte stuffing
-      (9/9 unit tests pass, verified against PPP FCS-16 reference vectors)
-- [ ] `sma-bt-protocol`: L2 packet body builder + command opcodes
-- [ ] `sma-bt-protocol`: authentication handshake
-- [ ] `bluez-transport`: RFCOMM socket
-- [ ] `bluez-transport`: mock for integration tests
-- [ ] `inverter-client`: session FSM
-- [ ] `mqtt-discovery`: own all per-inverter sensors
-- [ ] `storage`: TimescaleDB schema + writer
-- [ ] `daemon`: wire everything up
-- [ ] Parallel-run diff vs SBFspot fork
-- [ ] Cutover
+- [x] Core protocol: L1 + L2 parse/build, FCS-16, byte stuffing
+- [x] Handshake + logon (full SBFspot MIS-style sequence)
+- [x] 11 query kinds with typed parsers, 28 MQTT sensors
+- [x] MQTT LWT availability
+- [x] Adaptive sleep backoff + EHOSTDOWN detection
+- [x] Prometheus `/metrics` on :9090
+- [x] Parallel-run yield window for coexistence with other SMA integrations
+- [x] Archive sink: TimescaleDB or CSV (opt-in)
+- [x] 62 tests (unit + integration + proptest fuzz)
+- [x] Hardened systemd unit
+- [x] 4 ADRs documenting major decisions
+- [ ] Event log query (deferred, [ADR 0004](docs/adr/0004-event-log-deferred.md))
+- [ ] PVOutput upload (low priority, easy to add)
 
 ## License
 
-SMA's proprietary BT protocol is observed at the wire level; the SBFspot
-reference implementation (CC BY-NC-SA 3.0) was used as documentation only.
-No SBFspot source code is copied into this repository.
+SBFspot's CC BY-NC-SA source used as protocol reference only — no code
+copied. Captured wire frames (in `tests/fixtures/captured/`) are from my
+own inverter and are distributed here under Apache-2.0.
 
-Rust code in this repository is licensed MIT OR Apache-2.0 at your option.
+Rust code: MIT OR Apache-2.0 at your option.
+
+## Credits
+
+Protocol reverse-engineering based on observation of the SMA wire format
+and the public [SBFspot](https://github.com/SBFspot/SBFspot) reference
+implementation. PPP FCS-16 per RFC 1662 §C.2.
