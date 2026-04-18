@@ -322,9 +322,12 @@ pub fn parse_spot_dc_voltage(body: &[u8]) -> DcPerString {
 fn parse_dc_block(body: &[u8]) -> DcPerString {
     let mut out = DcPerString::default();
     let region = records_region(body);
-    let stride = 28;
+    const MIN: usize = 20;
+    const MAX: usize = 28;
     let mut i = 0;
-    while i + stride <= region.len() {
+    while i + MIN <= region.len() {
+        let remaining = region.len() - i;
+        let stride = if remaining >= MAX { MAX } else { MIN };
         let rec = &region[i..i + stride];
         let code = LittleEndian::read_u32(&rec[0..4]);
         let lri = record_lri(code);
