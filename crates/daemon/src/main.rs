@@ -11,7 +11,7 @@ use inverter_client::values::{
     parse_device_status, parse_energy_production, parse_grid_frequency, parse_grid_relay,
     parse_inverter_temperature, parse_operation_time, parse_software_version, parse_spot_ac_power,
     parse_spot_ac_total_power, parse_spot_ac_voltage, parse_spot_dc_power, parse_spot_dc_voltage,
-    status_text,
+    parse_type_label_raw, status_text, type_label_text,
 };
 use mqtt_discovery::{DeviceKind, DiscoveryPublisher, InverterIdentity, MqttClientConfig};
 use sma_bt_protocol::{auth::UserGroup, commands::QueryKind};
@@ -318,6 +318,18 @@ async fn run_inverter(
             if let Some(ver) = parse_software_version(&body) {
                 let _ = publisher.publish_value(&identity, "firmware_version", &ver).await;
                 identity.firmware = ver;
+            }
+        }
+        if let Ok(body) = session.query(QueryKind::TypeLabel).await {
+            if let Some(tag) = parse_type_label_raw(&body) {
+                if let Some(model) = type_label_text(tag) {
+                    let _ = publisher.publish_value(&identity, "inverter_model", model).await;
+                    identity.model = model.to_string();
+                } else {
+                    let _ = publisher
+                        .publish_value(&identity, "inverter_model", format!("TagID {}", tag))
+                        .await;
+                }
             }
         }
 

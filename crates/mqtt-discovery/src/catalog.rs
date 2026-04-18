@@ -259,6 +259,15 @@ pub fn sensor_catalog() -> &'static [SensorConfig] {
             diagnostic: true,
         },
         SensorConfig {
+            name: "Inverter Model",
+            key: "inverter_model",
+            device_class: None,
+            state_class: None,
+            unit: None,
+            icon: "mdi:solar-panel-large",
+            diagnostic: true,
+        },
+        SensorConfig {
             name: "Firmware Version",
             key: "firmware_version",
             device_class: None,

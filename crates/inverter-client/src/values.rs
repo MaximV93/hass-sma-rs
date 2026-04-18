@@ -239,6 +239,27 @@ pub fn parse_type_label_raw(body: &[u8]) -> Option<u32> {
     out
 }
 
+/// Map an SMA device tag id → human model string. Subset of SBFspot's
+/// TagList for the Sunny Boy HF/TL/TLX family that's likely to show up
+/// in residential setups. Unknown ids return None so the caller can
+/// preserve whatever string the config already provides.
+pub fn type_label_text(tag: u32) -> Option<&'static str> {
+    match tag {
+        9072 => Some("SB 3000HF-30"),
+        9073 => Some("SB 3600TL-21"),
+        9074 => Some("SB 4000TL-21"),
+        9075 => Some("SB 5000TL-21"),
+        9164 => Some("SB 3000TL-21"),
+        9165 => Some("SB 2500TL-21"),
+        9166 => Some("SB 1600TL-10"),
+        9263 => Some("SB 2500HF-30"),
+        9264 => Some("SB 3000HF-30"),
+        9265 => Some("SB 2000HF-30"),
+        9266 => Some("SB 1300TL-10"),
+        _ => None,
+    }
+}
+
 /// Per-phase AC readings. All values are Option because inverters may only
 /// populate L1 (single-phase) or leave unused phases as NaN.
 #[derive(Debug, Clone, Default, PartialEq)]
