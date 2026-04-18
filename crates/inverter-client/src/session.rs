@@ -206,6 +206,56 @@ impl<T: Transport> Session<T> {
         Err(SessionError::Silent { phase })
     }
 
+    /// Loop through incoming L2 ctrl=0x0001 replies until we find one with
+    /// matching pkt_id AND L1 source BT address matching `target_bt`. Used
+    /// for init where we specifically need the reply from OUR inverter,
+    /// not a MIS peer device.
+    async fn recv_init_from_target(
+        &mut self,
+        want_pkt_id: u16,
+        target_bt: [u8; 6],
+    ) -> Result<L2Reply> {
+        for attempt in 0..16 {
+            let bytes = self.recv_until_l1_ctrl(0x0001, "init").await?;
+            let frame = match Frame::parse(&bytes) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let (hdr, data) = match decode_l2(&frame.payload) {
+                Some(x) => x,
+                None => continue,
+            };
+            if hdr.pkt_id != want_pkt_id {
+                debug!(
+                    attempt,
+                    want_pkt = want_pkt_id,
+                    got_pkt = hdr.pkt_id,
+                    "init skip — non-matching pkt_id"
+                );
+                continue;
+            }
+            if frame.local_bt != target_bt {
+                debug!(
+                    attempt,
+                    target = ?target_bt,
+                    got_src = ?frame.local_bt,
+                    got_susy = hdr.app_susy_id,
+                    got_serial = hdr.app_serial,
+                    "init skip — reply from wrong BT source"
+                );
+                continue;
+            }
+            return Ok(L2Reply {
+                pkt_id: hdr.pkt_id,
+                error_code: hdr.error_code,
+                app_susy_id: hdr.app_susy_id,
+                app_serial: hdr.app_serial,
+                body: data.to_vec(),
+            });
+        }
+        Err(SessionError::Silent { phase: "init" })
+    }
+
     /// Perform the initial handshake + logon sequence. After this returns
     /// Ok, the session is LoggedIn and ready to accept queries.
     ///
@@ -303,7 +353,13 @@ impl<T: Transport> Session<T> {
         self.transport.send_frame(&init_frame).await?;
         debug!(pkt_id, "init sent");
 
-        let (_init_bytes, init_reply) = self.recv_l2_with_pkt_id(pkt_id, "init").await?;
+        // Loop init replies: only accept the one where the L1 src BT matches
+        // our target inverter. SMA MIS networks have multiple devices
+        // (repeater + other inverters); each replies with its OWN
+        // SUSyID/Serial in the L2 header. If we take the first reply blindly
+        // we end up addressing queries to a relay device that then returns
+        // retcode=0xFFFF ("I don't have that LRI") for everything.
+        let init_reply = self.recv_init_from_target(pkt_id, inverter_bt).await?;
         self.inverter_susy_id = init_reply.app_susy_id;
         self.inverter_serial = init_reply.app_serial;
         info!(
