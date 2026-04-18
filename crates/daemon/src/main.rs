@@ -154,7 +154,7 @@ async fn publish_query_result(
         }
         QueryKind::DeviceStatus => {
             if let Some(tag) = parse_device_status(body) {
-                let _ = publisher.publish_value(identity, "status", status_text(tag)).await;
+                let _ = publisher.publish_value(identity, "inverter_state", status_text(tag)).await;
             }
         }
         QueryKind::GridRelayStatus => {
@@ -364,9 +364,9 @@ async fn run_inverter(
                 let now = chrono::Utc::now();
                 metrics.last_successful_poll_unix.get_or_create(&lbl).set(now.timestamp());
                 let _ = publisher.publish_value(&identity, "last_poll", now.to_rfc3339()).await;
-                let _ = publisher.publish_value(&identity, "status", "ok").await;
+                let _ = publisher.publish_value(&identity, "poll_status", "ok").await;
             } else {
-                let _ = publisher.publish_value(&identity, "status", "error").await;
+                let _ = publisher.publish_value(&identity, "poll_status", "error").await;
                 break; // inner loop → reconnect
             }
         }

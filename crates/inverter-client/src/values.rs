@@ -366,20 +366,35 @@ pub fn parse_operation_time(body: &[u8]) -> OperationTime {
 
 /// Parse a DeviceStatus reply — the operation-health tag/code index.
 ///
-/// SBFspot decodes this via a SUSyID-specific tag table (see
-/// `SBFspot.cpp:tagdefs`). For now we return the raw code so the caller
-/// can map it. Common values: 307 = "OK", 455 = "Warning", 35 = "Error".
+/// SBFspot encodes status as a record with FOUR possible status tag slots
+/// at offsets 8, 12, 16, 20. Each slot is a u32 where the high byte's bit
+/// 0 (0x01000000 mask) marks the CURRENTLY SELECTED state. The low 24
+/// bits are the tag id. We scan all four slots and return the tag of the
+/// selected one.
+///
+/// Common tag ids: 307 = "Ok", 455 = "Warning", 35 = "Error", 303 = "Off".
 pub fn parse_device_status(body: &[u8]) -> Option<u32> {
     let mut out = None;
     for_each_28_record(body, |lri, _dt, rec| {
-        if lri == lri::INV_STATUS {
-            // DeviceStatus records encode the status tag at offset [8..12]
-            // in a "status selector" format. SBFspot reads 4 bytes then
-            // picks the first non-zero slot. Simplified: read at offset 8.
-            if rec.len() >= 12 {
-                let v = LittleEndian::read_u32(&rec[8..12]);
+        if lri == lri::INV_STATUS && rec.len() >= 24 {
+            for offset in [8usize, 12, 16, 20] {
+                let v = LittleEndian::read_u32(&rec[offset..offset + 4]);
+                if v == 0 || v == U32_NAN {
+                    continue;
+                }
+                // High byte's low bit = "this slot is selected".
+                if (v & 0x0100_0000) != 0 {
+                    out = Some(v & 0x00FF_FFFF);
+                    return;
+                }
+            }
+            // No slot had the selected bit — fall back to first non-NaN
+            // value as best-effort. SBFspot does the same in some branches.
+            for offset in [8usize, 12, 16, 20] {
+                let v = LittleEndian::read_u32(&rec[offset..offset + 4]);
                 if v != 0 && v != U32_NAN {
-                    out = Some(v & 0x00FF_FFFF); // low 24 bits = tag id
+                    out = Some(v & 0x00FF_FFFF);
+                    return;
                 }
             }
         }

@@ -233,11 +233,20 @@ pub fn sensor_catalog() -> &'static [SensorConfig] {
         // --- Diagnostic / identity ---
         SensorConfig {
             name: "Inverter Status",
-            key: "status",
+            key: "inverter_state",
             device_class: None,
             state_class: None,
             unit: None,
             icon: "mdi:heart-pulse",
+            diagnostic: true,
+        },
+        SensorConfig {
+            name: "Poll Status",
+            key: "poll_status",
+            device_class: None,
+            state_class: None,
+            unit: None,
+            icon: "mdi:check-network-outline",
             diagnostic: true,
         },
         SensorConfig {
