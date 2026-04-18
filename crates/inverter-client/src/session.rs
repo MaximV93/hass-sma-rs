@@ -377,9 +377,36 @@ impl<T: Transport> Session<T> {
         debug!("echo sent");
 
         // ── Step 3: recv topology (ctrl=0x0005), skip any 0x000a
-        let _topology_bytes = self
+        let topology_bytes = self
             .recv_until_l1_ctrl(0x0005, "topology")
             .await?;
+        // Parse topology payload for peer BT addresses + flags so user can
+        // see all devices on the piconet (useful for discovering zonneveld
+        // etc. when configuring additional inverters). Each device entry
+        // is 8 bytes: 6-byte BT MAC + 2 flag bytes. Flags `0x0101` = inverter,
+        // `0x0201` = our own local BT.
+        if topology_bytes.len() > 18 {
+            let payload = &topology_bytes[18..];
+            let mut peers: Vec<String> = Vec::new();
+            let mut ptr = 0;
+            while ptr + 8 <= payload.len() {
+                let mac = &payload[ptr..ptr + 6];
+                let flags_lo = payload[ptr + 6];
+                let flags_hi = payload[ptr + 7];
+                let mac_str = format!(
+                    "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                    mac[5], mac[4], mac[3], mac[2], mac[1], mac[0]
+                );
+                let kind = match (flags_lo, flags_hi) {
+                    (0x01, 0x01) => "inverter",
+                    (0x02, 0x01) => "host/local",
+                    _ => "unknown",
+                };
+                peers.push(format!("{} ({})", mac_str, kind));
+                ptr += 8;
+            }
+            info!(peers = ?peers, "BT piconet topology");
+        }
         debug!("topology received");
 
         self.state = SessionState::Enumerating;
