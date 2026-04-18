@@ -88,11 +88,19 @@ pub struct Session<T: Transport> {
 
 impl<T: Transport> Session<T> {
     pub fn new(transport: T, cfg: SessionConfig) -> Self {
+        Self::new_with_app_serial(transport, cfg, session_id())
+    }
+
+    /// Build a session with an explicit `app_serial`. The inverter tracks
+    /// session identity by app_serial; if we reuse the same one across
+    /// reconnects the inverter recognises us as the same client and
+    /// doesn't reject our logon with 0x0001 ("session already active").
+    pub fn new_with_app_serial(transport: T, cfg: SessionConfig, app_serial: u32) -> Self {
         Self {
             transport,
             cfg,
             state: SessionState::Disconnected,
-            app_serial: session_id(),
+            app_serial,
             pcktid: 0,
             inverter_susy_id: 0,
             inverter_serial: 0,
@@ -475,7 +483,6 @@ impl<T: Transport> Session<T> {
                 Some(r) => r,
                 None => {
                     if let Some(rej) = last_reject.as_ref() {
-                        // 0x0100 is always invalid-password (hard fail).
                         if rej.error_code == 0x0100 {
                             tracing::warn!(
                                 susy = rej.app_susy_id,
@@ -483,20 +490,6 @@ impl<T: Transport> Session<T> {
                                 "logon rejected: invalid password"
                             );
                             return Err(SessionError::LogonFailed { code: 0x0100 });
-                        }
-                        // 0x0001 is often "session already active" — proceed
-                        // optimistically. If queries fail, the poll loop will
-                        // reconnect.
-                        if rej.error_code == 0x0001 {
-                            tracing::info!(
-                                susy = rej.app_susy_id,
-                                serial = rej.app_serial,
-                                "logon returned 0x0001 — proceeding optimistically"
-                            );
-                            return Ok({
-                                self.state = SessionState::LoggedIn;
-                                ()
-                            });
                         }
                         tracing::warn!(
                             code = format!("0x{:04x}", rej.error_code),

@@ -201,6 +201,23 @@ async fn run_inverter(
     const MAX_TRANSIENT_BACKOFF: Duration = Duration::from_secs(60);
     const SLEEP_BACKOFF: Duration = Duration::from_secs(600); // 10 min when inverter asleep
 
+    // Stable session identity: inverter tracks by app_serial. Same value
+    // across reconnects → inverter sees us as the same client + accepts the
+    // next logon instead of returning 0x0001 "session already active".
+    let stable_app_serial: u32 = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as u32)
+            .unwrap_or(900_000_000);
+        // Mix the slot name's hash in so multiple inverters get distinct ids.
+        let mut h = secs;
+        for b in inv_cfg.slot.bytes() {
+            h = h.wrapping_mul(31).wrapping_add(b as u32);
+        }
+        900_000_000u32.wrapping_add(h & 0x05F5_E0FF)
+    };
+
     let mut backoff = MIN_BACKOFF;
     let mut host_down_streak: u32 = 0;
     let mut published_offline = false;
@@ -251,7 +268,7 @@ async fn run_inverter(
             timeout_ms: rfcomm_timeout.as_millis() as u64,
             mis_enabled: inv_cfg.mis_enabled,
         };
-        let mut session = Session::new(transport, cfg);
+        let mut session = Session::new_with_app_serial(transport, cfg, stable_app_serial);
 
         if let Err(e) = session.handshake_and_logon().await {
             metrics.handshake_errors_total.get_or_create(&lbl).inc();
