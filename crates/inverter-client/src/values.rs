@@ -228,15 +228,40 @@ pub fn parse_grid_frequency(body: &[u8]) -> Option<f32> {
     hz
 }
 
-/// Parse a TypeLabel reply — returns the raw u32 index into SMA TagList.
+/// Parse a TypeLabel reply — returns the selected tag index.
+///
+/// TypeLabel records are 40 bytes (not 28). Each carries up to 8
+/// attribute slots at offsets 8..40, each a u32 where:
+/// - low 24 bits = tag id
+/// - high byte 0x01 = this tag is currently SELECTED
+/// - high byte 0xFE = end-of-list marker
+///
+/// SBFspot's `getattribute()` scans and returns all tags with the
+/// selected bit; we just want the first selected one (model name).
 pub fn parse_type_label_raw(body: &[u8]) -> Option<u32> {
-    let mut out = None;
-    for_each_28_record(body, |lri, _dt, rec| {
+    let region = records_region(body);
+    const RECORDSIZE: usize = 40;
+    let mut i = 0;
+    while i + RECORDSIZE <= region.len() {
+        let rec = &region[i..i + RECORDSIZE];
+        let code = LittleEndian::read_u32(&rec[0..4]);
+        let lri = record_lri(code);
         if matches!(lri, 0x0082_1E00 | 0x0082_1F00 | 0x0082_2000) {
-            out = u32_value_28(rec);
+            // Scan 8 attribute slots
+            for off in (8..RECORDSIZE).step_by(4) {
+                let attr = LittleEndian::read_u32(&rec[off..off + 4]);
+                let tag = attr & 0x00FF_FFFF;
+                if tag == 0x00FF_FFFE {
+                    break;
+                }
+                if (attr >> 24) == 1 {
+                    return Some(tag);
+                }
+            }
         }
-    });
-    out
+        i += RECORDSIZE;
+    }
+    None
 }
 
 /// Map an SMA device tag id → human model string. Subset of SBFspot's
@@ -638,9 +663,16 @@ mod tests {
 
     #[test]
     fn parse_type_label_returns_raw_u32() {
-        let rec = build_28_record(0x00_82_1E_01, 0, 9321);
+        // 40-byte TypeLabel record: code + dt + 8 × u32 attribute slots.
+        // Slot 0 is inactive (high byte != 1), slot 1 has tag 9072 + selected bit.
+        let mut rec = [0u8; 40];
+        LittleEndian::write_u32(&mut rec[0..4], 0x00_82_1E_01);
+        LittleEndian::write_u32(&mut rec[4..8], 0);
+        LittleEndian::write_u32(&mut rec[8..12], 0x00_00_00_FF); // inactive
+        LittleEndian::write_u32(&mut rec[12..16], 0x01_00_23_70); // 0x2370 = 9072 + selected
+        LittleEndian::write_u32(&mut rec[16..20], 0x00_FF_FF_FE); // end marker
         let body = with_prefix(&rec);
-        assert_eq!(parse_type_label_raw(&body), Some(9321));
+        assert_eq!(parse_type_label_raw(&body), Some(9072));
     }
 
     /// Regression: the real reply body observed live (nighttime — all values
