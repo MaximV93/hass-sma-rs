@@ -294,6 +294,33 @@ pub fn sensor_catalog() -> &'static [SensorConfig] {
             icon: "mdi:clock-check",
             diagnostic: true,
         },
+        SensorConfig {
+            name: "Last Event",
+            key: "last_event",
+            device_class: None,
+            state_class: None,
+            unit: None,
+            icon: "mdi:alert-circle-outline",
+            diagnostic: true,
+        },
+        SensorConfig {
+            name: "Last Event At",
+            key: "last_event_at",
+            device_class: Some("timestamp"),
+            state_class: None,
+            unit: None,
+            icon: "mdi:clock-alert-outline",
+            diagnostic: true,
+        },
+        SensorConfig {
+            name: "Event Count 24h",
+            key: "last_event_count_24h",
+            device_class: None,
+            state_class: Some("measurement"),
+            unit: None,
+            icon: "mdi:counter",
+            diagnostic: true,
+        },
     ]
 }
 

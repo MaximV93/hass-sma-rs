@@ -370,12 +370,22 @@ async fn mis_multi_device_routes_each_serial() {
         Some(hdr.dst_serial)
     };
 
-    let serial_a_hit = sent.iter().filter_map(|f| find_dst_serial(f))
+    let serial_a_hit = sent
+        .iter()
+        .filter_map(|f| find_dst_serial(f))
         .any(|s| s == 2_120_121_246);
-    let serial_b_hit = sent.iter().filter_map(|f| find_dst_serial(f))
+    let serial_b_hit = sent
+        .iter()
+        .filter_map(|f| find_dst_serial(f))
         .any(|s| s == 2_120_121_383);
-    assert!(serial_a_hit, "at least one outbound frame must address device A's serial (2120121246)");
-    assert!(serial_b_hit, "at least one outbound frame must address device B's serial (2120121383)");
+    assert!(
+        serial_a_hit,
+        "at least one outbound frame must address device A's serial (2120121246)"
+    );
+    assert!(
+        serial_b_hit,
+        "at least one outbound frame must address device B's serial (2120121383)"
+    );
 }
 
 /// Event log session method: sends a query, receives a single-fragment
@@ -408,8 +418,8 @@ async fn event_log_query_single_fragment_roundtrip() {
         body[off..off + 4].copy_from_slice(&42u32.to_le_bytes());
         body[off + 4..off + 8].copy_from_slice(&1_700_000_000u32.to_le_bytes());
         body[off + 8..off + 12].copy_from_slice(&0x0000_0133u32.to_le_bytes()); // tag 307
-        // Final fragment: body size < first-fragment baseline causes
-        // aggregator to stop after this one.
+                                                                                // Final fragment: body size < first-fragment baseline causes
+                                                                                // aggregator to stop after this one.
         let l2 = encode_l2(&hdr, &body);
         let mut b = FrameBuilder::new(inverter, local, 0x0001);
         b.extend(&l2);

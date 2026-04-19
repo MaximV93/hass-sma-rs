@@ -109,6 +109,15 @@ pub struct InverterCfg {
     /// backwards-compatible. See ADR 0005.
     #[serde(default)]
     pub devices: Vec<DeviceCfg>,
+    /// Enable the experimental event-log query. When true, the daemon
+    /// runs ONE event-log query per session (after logon) covering
+    /// the last 24 hours and publishes the most recent event to MQTT
+    /// as `sbfspot_<device>_last_event` (text lookup via event_tag_text).
+    /// Default: false. Wire behavior (fragment termination etc.) has
+    /// NOT been validated against a real inverter — turning this on is
+    /// at your own risk. Safe to leave off.
+    #[serde(default)]
+    pub event_log_enabled: bool,
 }
 
 /// A single MIS-reachable device behind a BT repeater.

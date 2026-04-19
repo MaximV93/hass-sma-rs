@@ -611,6 +611,60 @@ async fn run_inverter(
             QueryKind::GridRelayStatus,
         ];
 
+        // One-shot event-log query per device (OPT-IN via
+        // `event_log_enabled: true` in config). Turns up the last 24h
+        // of events, publishes the most recent event's text to MQTT.
+        // Wire behavior is unverified — fragment termination uses a
+        // body-size heuristic. If you see event-log queries looping
+        // or timing out, turn this flag back off.
+        if inv_cfg.event_log_enabled {
+            use chrono::Utc;
+            let end = Utc::now().timestamp() as u32;
+            let start = end.saturating_sub(86_400);
+            for (id, susy, serial) in targets.iter() {
+                match session
+                    .query_event_log_for_device(*susy, *serial, start, end)
+                    .await
+                {
+                    Ok(body) => {
+                        let recs = inverter_client::values::parse_event_log_records(&body);
+                        info!(
+                            slot = %id.slot, serial = *serial, count = recs.len(),
+                            "event log fetched"
+                        );
+                        if let Some(latest) = recs.iter().max_by_key(|r| r.timestamp) {
+                            let text = latest
+                                .text()
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| format!("TagID {}", latest.tag()));
+                            let _ = publisher.publish_value(id, "last_event", &text).await;
+                            let _ = publisher
+                                .publish_value(
+                                    id,
+                                    "last_event_at",
+                                    chrono::DateTime::<Utc>::from_timestamp(
+                                        latest.timestamp as i64,
+                                        0,
+                                    )
+                                    .map(|t| t.to_rfc3339())
+                                    .unwrap_or_default(),
+                                )
+                                .await;
+                            let _ = publisher
+                                .publish_value(id, "last_event_count_24h", recs.len())
+                                .await;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            slot = %id.slot, serial = *serial, error = %e,
+                            "event log query failed — continuing without it"
+                        );
+                    }
+                }
+            }
+        }
+
         // One-shot identity queries, run once per target after logon.
         // In MIS mode each device's firmware/model comes from its own reply.
         for (id, susy, serial) in targets.iter_mut() {
