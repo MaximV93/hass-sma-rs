@@ -406,15 +406,38 @@ async fn run_inverter(
             continue;
         }
 
-        // Refresh identity with real inverter serial.
+        // Refresh identity with real inverter serial for the init-derived
+        // device. In legacy single-device mode this is the target we'll
+        // poll. In MIS mode it's kept for logs but polling targets come
+        // from `inv_cfg.devices`.
         identity.serial = session.inverter_serial;
-        if let Err(e) = publisher.announce(&identity).await {
-            warn!(slot = %inv_cfg.slot, error = %e, "discovery announce failed");
+        let init_susy = session.inverter_susy_id;
+        let init_serial = session.inverter_serial;
+
+        // Build the list of poll targets. Single-device mode: one entry
+        // from the init reply. MIS mode: one entry per configured device.
+        // Announce + publish_online each target separately so HA gets one
+        // device card per inverter.
+        let mut targets: Vec<(InverterIdentity, u16, u32)> = Vec::new();
+        if inv_cfg.devices.is_empty() {
+            targets.push((identity.clone(), init_susy, init_serial));
         } else {
-            info!(slot = %inv_cfg.slot, serial = identity.serial, "announced");
+            for d in &inv_cfg.devices {
+                let mut id = identity.clone();
+                id.slot = d.slot.clone();
+                id.serial = d.app_serial;
+                id.model = d.model.clone();
+                targets.push((id, init_susy, d.app_serial));
+            }
         }
-        // Mark this inverter's sensors as available in HA.
-        let _ = publisher.publish_online(&identity).await;
+        for (id, _, _) in &targets {
+            if let Err(e) = publisher.announce(id).await {
+                warn!(slot = %id.slot, error = %e, "discovery announce failed");
+            } else {
+                info!(slot = %id.slot, serial = id.serial, "announced");
+            }
+            let _ = publisher.publish_online(id).await;
+        }
         published_offline = false;
 
         // Poll loop: each tick sweeps multiple QueryKinds through the same
@@ -437,29 +460,27 @@ async fn run_inverter(
             QueryKind::GridRelayStatus,
         ];
 
-        // One-shot identity queries after logon.
-        if let Ok(body) = session.query(QueryKind::SoftwareVersion).await {
-            if let Some(ver) = parse_software_version(&body) {
-                let _ = publisher.publish_value(&identity, "firmware_version", &ver).await;
-                identity.firmware = ver;
-            }
-        }
-        // Model: first publish whatever was in config (survives TypeLabel
-        // queries that don't contain a recognisable tag). Then attempt
-        // TypeLabel — if it yields a known tag, override with the looked-up
-        // name; otherwise leave the config value intact.
-        let _ = publisher
-            .publish_value(&identity, "inverter_model", &identity.model)
-            .await;
-        if let Ok(body) = session.query(QueryKind::TypeLabel).await {
-            if let Some(tag) = parse_type_label_raw(&body) {
-                if let Some(model) = type_label_text(tag) {
-                    let _ = publisher.publish_value(&identity, "inverter_model", model).await;
-                    identity.model = model.to_string();
+        // One-shot identity queries, run once per target after logon.
+        // In MIS mode each device's firmware/model comes from its own reply.
+        for (id, susy, serial) in targets.iter_mut() {
+            if let Ok(body) = session.query_for_device(*susy, *serial, QueryKind::SoftwareVersion).await {
+                if let Some(ver) = parse_software_version(&body) {
+                    let _ = publisher.publish_value(id, "firmware_version", &ver).await;
+                    id.firmware = ver;
                 }
-                // Unknown tag: keep the config-provided model in HA.
             }
-            // parse returned None: same — keep config model.
+            // Model: publish config value first (survives unknown TypeLabel).
+            let _ = publisher
+                .publish_value(id, "inverter_model", &id.model)
+                .await;
+            if let Ok(body) = session.query_for_device(*susy, *serial, QueryKind::TypeLabel).await {
+                if let Some(tag) = parse_type_label_raw(&body) {
+                    if let Some(model) = type_label_text(tag) {
+                        let _ = publisher.publish_value(id, "inverter_model", model).await;
+                        id.model = model.to_string();
+                    }
+                }
+            }
         }
 
         let session_start = chrono::Utc::now();
@@ -493,33 +514,43 @@ async fn run_inverter(
             }
 
             let mut cycle_ok = true;
+            let mut session_error: Option<String> = None;
 
-            for kind in per_tick_queries.iter() {
-                match session.query(*kind).await {
-                    Ok(body) => publish_query_result(*kind, &body, &publisher, &identity, &metrics, &lbl, &archiver).await,
-                    Err(e) => {
-                        metrics.poll_errors_total.get_or_create(&lbl).inc();
-                        warn!(
-                            slot = %inv_cfg.slot, ?kind, error = %e,
-                            "query failed — reconnecting"
-                        );
-                        cycle_ok = false;
-                        break;
+            'targets: for (id, susy, serial) in targets.iter() {
+                for kind in per_tick_queries.iter() {
+                    match session.query_for_device(*susy, *serial, *kind).await {
+                        Ok(body) => {
+                            publish_query_result(*kind, &body, &publisher, id, &metrics, &lbl, &archiver).await
+                        }
+                        Err(e) => {
+                            metrics.poll_errors_total.get_or_create(&lbl).inc();
+                            warn!(
+                                slot = %id.slot, serial = *serial, ?kind, error = %e,
+                                "query failed — cycle aborted"
+                            );
+                            session_error = Some(format!("{e}"));
+                            let _ = publisher.publish_value(id, "poll_status", "error").await;
+                            cycle_ok = false;
+                            break 'targets;
+                        }
                     }
                 }
+                let now = chrono::Utc::now();
+                let _ = publisher.publish_value(id, "last_poll", now.to_rfc3339()).await;
+                let _ = publisher.publish_value(id, "poll_status", "ok").await;
+                let uptime_s = (now - session_start).num_seconds();
+                let _ = publisher.publish_value(id, "session_uptime", uptime_s).await;
             }
 
-            // Publish last-poll timestamp on success (ISO 8601) + update
-            // metric for Grafana/alerting.
             if cycle_ok {
                 let now = chrono::Utc::now();
                 metrics.last_successful_poll_unix.get_or_create(&lbl).set(now.timestamp());
-                let _ = publisher.publish_value(&identity, "last_poll", now.to_rfc3339()).await;
-                let _ = publisher.publish_value(&identity, "poll_status", "ok").await;
-                let uptime_s = (now - session_start).num_seconds();
-                let _ = publisher.publish_value(&identity, "session_uptime", uptime_s).await;
             } else {
-                let _ = publisher.publish_value(&identity, "poll_status", "error").await;
+                warn!(
+                    slot = %inv_cfg.slot,
+                    error = %session_error.as_deref().unwrap_or("unknown"),
+                    "cycle aborted — reconnecting"
+                );
                 break; // inner loop → reconnect
             }
         }

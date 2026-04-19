@@ -3,6 +3,44 @@
 All notable changes to hass-sma-rs are tracked here. This project follows
 semantic-ish versioning; pre-1.0 is rapid iteration.
 
+## 0.1.46 — 2026-04-19 (MIS multi-inverter polling)
+
+### Added
+- **Multi-device polling behind one BT repeater.** Optional
+  `devices:` sub-list on each `inverters:` config entry enumerates
+  the inverters reachable via a shared BT repeater — SBFspot's MIS
+  model. Each entry produces its own 28-sensor HA device card and
+  gets polled round-robin every tick through the same RFCOMM session.
+  Empty `devices:[]` stays backwards-compatible (legacy single-device
+  path). See [ADR 0005](docs/adr/0005-mis-multi-inverter.md).
+- `Session::query_for_device(susy, serial, kind)` — addressable
+  query primitive. `Session::query(kind)` now delegates to it using
+  the init-derived identity.
+- `InverterCfg.devices: Vec<DeviceCfg>` + YAML schema + 2 unit tests.
+- Per-device `announce` + `publish_online` + firmware/model queries
+  in the daemon's post-logon setup.
+- Per-device `poll_status` / `last_poll` / `session_uptime` on every
+  tick, so HA alerts work per device.
+
+### Example MIS config (Maxim's installation)
+```yaml
+inverters:
+  - slot: repeater
+    bt_address: "00:80:25:21:32:35"
+    password: "<shared>"
+    devices:
+      - slot: zolder
+        app_serial: 2120121246
+        model: "SB 3000HF-30"
+      - slot: garage
+        app_serial: 2120121383
+        model: "SB 2000HF-30"
+```
+
+### Internal
+- 66 workspace tests green, clippy -D warnings clean.
+- Addon schema extended with `devices:` optional list.
+
 ## 0.1.45 — 2026-04-19 (persistent app_serial across restarts)
 
 ### Fixed
