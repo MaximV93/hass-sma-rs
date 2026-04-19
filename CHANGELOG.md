@@ -3,6 +3,33 @@
 All notable changes to hass-sma-rs are tracked here. This project follows
 semantic-ish versioning; pre-1.0 is rapid iteration.
 
+## 0.1.42 — 2026-04-19 (sunrise bug hunt)
+
+### Fixed
+- **Yield-window teardown sent no LOGOFF** — the parallel-run feature
+  dropped the RFCOMM socket abruptly, leaving the inverter holding
+  zombie session state for ~15 min. Every post-yield reconnect inside
+  that window failed with `EHOSTDOWN (os error 112)`, which the
+  adaptive-backoff mistook for "inverter asleep" → 10-minute reconnect
+  delays → sensors stuck `unavailable` for 15+ min after every yield.
+  Caught at dawn today when the first yield-after-night-idle triggered
+  it live. New `Session::graceful_close()` sends a proper LOGOFF
+  (broadcast dst, L1 ctrl=0x0001, same shape SBFspot uses in
+  `logoffSMAInverter()`) with a 150ms grace period before closing.
+  Used on both the yield path and the normal end-of-outer-loop close.
+- **MockTransport is now `Clone`** — backed by `Arc<Mutex>` so tests
+  can keep a handle after moving one into `Session::new`. Needed for
+  the two new regression tests.
+
+### Added
+- **Regression tests**:
+  - `graceful_close_emits_logoff` — after handshake, exactly one
+    extra frame is sent on close, with the L2 signature present
+    and broadcast dst.
+  - `graceful_close_safe_when_not_logged_in` — no send is attempted
+    if the session never reached `LoggedIn`. Safe on error paths.
+  64 workspace tests total (up from 62).
+
 ## 0.1.40 — 2026-04-19 (overnight work)
 
 ### Added

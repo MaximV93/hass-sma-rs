@@ -6,23 +6,26 @@
 use crate::{Result, Transport, TransportError};
 use async_trait::async_trait;
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+/// `Clone` is cheap — all handles share the same queues + sent log.
+/// Lets a test keep a handle after moving one into `Session::new`.
+#[derive(Clone)]
 pub struct MockTransport {
     /// Canned replies the transport will return on `recv_frame`, in order.
-    replies: Mutex<VecDeque<Vec<u8>>>,
+    replies: Arc<Mutex<VecDeque<Vec<u8>>>>,
     /// Everything `send_frame` has been called with. Inspect in tests.
-    pub sent: Mutex<Vec<Vec<u8>>>,
+    pub sent: Arc<Mutex<Vec<Vec<u8>>>>,
     /// Once set, further operations return `Err(Closed)`.
-    closed: Mutex<bool>,
+    closed: Arc<Mutex<bool>>,
 }
 
 impl MockTransport {
     pub fn new() -> Self {
         Self {
-            replies: Mutex::new(VecDeque::new()),
-            sent: Mutex::new(Vec::new()),
-            closed: Mutex::new(false),
+            replies: Arc::new(Mutex::new(VecDeque::new())),
+            sent: Arc::new(Mutex::new(Vec::new())),
+            closed: Arc::new(Mutex::new(false)),
         }
     }
 

@@ -621,6 +621,39 @@ impl<T: Transport> Session<T> {
         self.transport.close().await?;
         Ok(())
     }
+
+    /// Send a LOGOFF command to the inverter, then close the transport.
+    ///
+    /// Without this, the inverter holds zombie session state for up to
+    /// ~15 min — during which any reconnect attempt (including the
+    /// parallel-run yield window) fails with EHOSTDOWN. Matches SBFspot's
+    /// `logoffSMAInverter()` shape: broadcast dst, L1 ctrl=0x0001, body
+    /// built by `build_logoff_body`.
+    ///
+    /// Any send failure is logged + swallowed — this is best-effort
+    /// cleanup, the caller still expects the transport to be gone after.
+    pub async fn graceful_close(&mut self) -> Result<()> {
+        if matches!(self.state, SessionState::LoggedIn) {
+            let pkt_id = self.next_pcktid();
+            let logoff_body = build_logoff_body(pkt_id, self.app_serial);
+            let logoff_frame = FrameBuilder::new(self.cfg.local_bt, [0xFF; 6], 0x0001)
+                .extend(&logoff_body)
+                .build();
+            match self.transport.send_frame(&logoff_frame).await {
+                Ok(_) => {
+                    debug!(pkt_id, "graceful logoff sent");
+                    // Tiny grace period so the inverter processes the
+                    // LOGOFF before we rip the socket out. 150ms is well
+                    // under any BT roundtrip and well over processing.
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                }
+                Err(e) => {
+                    debug!(error = %e, "graceful logoff failed (transport likely dead) — closing anyway");
+                }
+            }
+        }
+        self.close().await
+    }
 }
 
 /// Error-level hex dump of a raw frame and its parsed payload. Called on

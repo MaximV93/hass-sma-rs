@@ -407,7 +407,10 @@ async fn run_inverter(
                     duration_secs = inv_cfg.yield_duration.as_secs(),
                     "yielding BT session for parallel-run peer"
                 );
-                let _ = session.close().await;
+                // Send LOGOFF before dropping the socket, otherwise the
+                // inverter holds zombie session state for ~15 min and
+                // every reconnect inside that window fails EHOSTDOWN.
+                let _ = session.graceful_close().await;
                 tokio::time::sleep(inv_cfg.yield_duration).await;
                 break; // outer loop reconnects
             }
@@ -443,7 +446,7 @@ async fn run_inverter(
                 break; // inner loop → reconnect
             }
         }
-        let _ = session.close().await;
+        let _ = session.graceful_close().await;
         // Outer loop iterates: reconnect.
     }
 }

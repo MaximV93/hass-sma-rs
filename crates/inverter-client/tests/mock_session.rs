@@ -209,3 +209,89 @@ async fn logon_failure_is_typed() {
     let err = session.handshake_and_logon().await.unwrap_err();
     assert!(matches!(err, SessionError::LogonFailed { code: 0x0100 }));
 }
+
+/// After a successful logon, graceful_close must send a LOGOFF frame
+/// BEFORE closing the transport. Regression: the parallel-run yield
+/// path used to just drop the socket, leaving the inverter holding a
+/// zombie session for ~15 min and rejecting every reconnect with
+/// EHOSTDOWN until its own timeout.
+#[tokio::test]
+async fn graceful_close_emits_logoff() {
+    use sma_bt_protocol::BT_L2_SIGNATURE;
+
+    let local: [u8; 6] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+    let inverter: [u8; 6] = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+
+    let mock = MockTransport::new();
+    mock.queue_replies(vec![
+        fake_hello(inverter, local),
+        fake_topology(inverter, local),
+        fake_init_reply(inverter, local, 1),
+        fake_logon_reply(inverter, local, 3),
+    ]);
+
+    let cfg = SessionConfig {
+        inverter_bt: inverter,
+        local_bt: local,
+        password: "0000".to_string(),
+        user_group: UserGroup::User,
+        timeout_ms: 1000,
+        mis_enabled: false,
+    };
+    let mut session = Session::new(mock.clone(), cfg);
+    session.handshake_and_logon().await.expect("handshake OK");
+    assert_eq!(session.state(), SessionState::LoggedIn);
+
+    let pre_close_count = mock.sent_frames().len();
+    session.graceful_close().await.expect("graceful close OK");
+    let post_close_count = mock.sent_frames().len();
+
+    assert_eq!(
+        post_close_count,
+        pre_close_count + 1,
+        "graceful_close must emit exactly one extra frame (the LOGOFF)"
+    );
+    assert_eq!(session.state(), SessionState::Disconnected);
+
+    // Inspect the LOGOFF frame: L2-wrapped, contains the L2 signature,
+    // destination is broadcast [0xFF;6] (mirrors handshake logoff shape).
+    let logoff = mock.sent_frames().last().cloned().expect("frame");
+    let sig = BT_L2_SIGNATURE.to_le_bytes();
+    assert!(
+        logoff.windows(sig.len()).any(|w| w == sig),
+        "logoff frame must carry the L2 signature"
+    );
+    // L1 header: [0x7E, len_lo, len_hi, cks, src(6), dst(6), ctrl_lo, ctrl_hi]
+    // dst at bytes 10..16.
+    assert_eq!(
+        &logoff[10..16],
+        &[0xFF; 6],
+        "logoff must go to broadcast dst"
+    );
+}
+
+/// graceful_close on a non-logged-in session must not crash and must
+/// not attempt a send. Safe to call on error paths where logon never
+/// completed.
+#[tokio::test]
+async fn graceful_close_safe_when_not_logged_in() {
+    let local: [u8; 6] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+    let inverter: [u8; 6] = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+
+    let mock = MockTransport::new();
+    let cfg = SessionConfig {
+        inverter_bt: inverter,
+        local_bt: local,
+        password: "0000".to_string(),
+        user_group: UserGroup::User,
+        timeout_ms: 1000,
+        mis_enabled: false,
+    };
+    let mut session = Session::new(mock.clone(), cfg);
+    assert_eq!(session.state(), SessionState::Disconnected);
+    session.graceful_close().await.expect("safe close");
+    assert!(
+        mock.sent_frames().is_empty(),
+        "no logoff must be sent if session never reached LoggedIn"
+    );
+}
