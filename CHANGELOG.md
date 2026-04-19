@@ -3,6 +3,61 @@
 All notable changes to hass-sma-rs are tracked here. This project follows
 semantic-ish versioning; pre-1.0 is rapid iteration.
 
+## 0.1.49 — 2026-04-19 (self-audit follow-up — 6 phases)
+
+Everything from this morning's audit [telegram post] addressed.
+
+### Fixed
+- **MIS offline-availability bug** (daemon) — sleep detection now
+  flips availability on EVERY announced device, not just the parent
+  repeater slot. In MIS setups with 2+ inverters, HA would keep
+  showing `available` after the inverter went to sleep because
+  `publish_offline` was going to the parent slot that had no
+  subscribers.
+- **post_yield_deadline staleness** — Option now clears when the
+  grace window expires. Behavior unchanged; code smell gone.
+- **DeviceCfg.password silent ignore** — now logs WARN at startup
+  if someone set it, with an explanation of why broadcast logon
+  makes per-device passwords a no-op.
+
+### Added (features)
+- **Event-log integration into the daemon** (opt-in via
+  `inverters[].event_log_enabled: true`). On enable, queries the
+  last 24 h of events once per session, publishes `last_event`,
+  `last_event_at`, `last_event_count_24h` MQTT sensors per device.
+  Wire behavior still not real-hardware-validated; flag default off.
+- **PVOutput HTTP uploader** (opt-in via `--features pvoutput`
+  cargo feature — off in default builds to keep binary small).
+  Reads from the shared Prometheus registry every
+  `upload_interval` (default 5 min) and POSTs to
+  `pvoutput.org/service/r2/addstatus.jsp`. Config block
+  `pvoutput: { api_key, systems: [...], upload_interval }` on
+  DaemonConfig.
+
+### Added (tests)
+- MIS multi-device routing integration test (mock transport, 2 target
+  serials, verifies both dst_serials reach the outbound L2 header).
+- Event-log session roundtrip test (mock transport with fragment +
+  sentinel aggregation).
+- PVOutput config YAML roundtrip + defaults + empty-systems tests.
+- 77 → 81 workspace tests.
+
+### Added (docs)
+- **SECURITY.md** — disclosure policy, scope, 24h/7d/30d SLAs.
+- **CODE_OF_CONDUCT.md** — short technical-respect code.
+- **.github/ISSUE_TEMPLATE/** (bug + feature) + **PR template**.
+- **deploy/addon/README.md** — explains the two-repo build flow.
+- **ADR 0001 refresh** — added bug #14 (yield LOGOFF + post-yield
+  grace) and a topology addendum pointing to ADR 0005.
+- **Grafana alerts** — updated to use `{{ $labels.device }}` for
+  per-device metrics (imbalance, temperature, grid frequency); added
+  label-conventions header comment.
+- CHANGELOG entries for every sub-phase + test count fix (76 → 77).
+
+### Internal
+- 81 workspace tests, clippy -D warnings clean on BOTH default AND
+  `--features pvoutput` builds, rustfmt clean.
+
 ## 0.1.48 — 2026-04-19 (event log + PVOutput scaffolding + docs)
 
 ### Added
