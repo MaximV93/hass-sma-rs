@@ -1,7 +1,7 @@
 # ADR 0005 — MIS multi-inverter polling (repeater + N devices)
 
 Date: 2026-04-19
-Status: planned
+Status: accepted (shipped 0.1.46)
 
 ## Context
 
@@ -132,8 +132,19 @@ explicitly. Future phase: add a `probe` subcommand that runs a
 "login-all" + device-status enumeration once and prints the config
 YAML to stdout, so users don't have to hunt for serials.
 
+## Live validation (2026-04-19 09:55 local)
+
+First poll cycle after deploying 0.1.46 with the MIS config above:
+- zolder serial 2120121246 → reply_retcode=0, SpotAcTotalPower=139 W
+- garage serial 2120121383 → reply_retcode=0, SpotAcTotalPower=1071 W
+- Same RFCOMM session, round-robin queries (22 queries/tick, ~8 s)
+- 58 HA sensors live (29 per device)
+
+Initial hypothesis correct: per-request app_serial addressing reaches
+each device behind the repeater without any handshake changes.
+
 ## Status
-Partially implemented (protocol + config primitives laid):
+Fully implemented and live (0.1.46):
 
 - ✅ `Session::query_for_device(susy, serial, kind)` (commit ca09c7e)
 - ✅ `InverterCfg.devices: Vec<DeviceCfg>` + YAML schema (commit 875612f)
