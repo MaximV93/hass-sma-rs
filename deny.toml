@@ -10,6 +10,22 @@ targets = [
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
+ignore = [
+    # RUSTSEC-2023-0071 "Marvin Attack" in the `rsa` crate. Pulled
+    # transitively by sqlx (postgres feature) in our `storage` crate.
+    # The attack requires an attacker able to observe precise timing
+    # of our DB client. `storage` is opt-in via addon config and, when
+    # enabled, connects to TimescaleDB over localhost or a private
+    # network — not an attacker-observable channel. Revisit when a
+    # constant-time `rsa` patch ships.
+    "RUSTSEC-2023-0071",
+    # RUSTSEC-2021-0046 is about an UNRELATED `telemetry` crate on
+    # crates.io (Yoric/telemetry.rs). Our workspace has a local crate
+    # also named `telemetry` — cargo-audit matches by name alone and
+    # false-positives. Low priority to rename locally; ignore the
+    # advisory instead.
+    "RUSTSEC-2021-0046",
+]
 
 [licenses]
 allow = [
@@ -28,6 +44,10 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards         = "deny"
+# `*` is fine on internal workspace path-deps (no version constraint
+# is meaningful when the code is right there in the repo). Only flag
+# external wildcards.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
