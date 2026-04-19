@@ -181,4 +181,48 @@ mod tests {
         let s = status_at(ts, Some(u64::MAX), Some(300), None, None);
         assert_eq!(s.energy_today_wh, None);
     }
+
+    #[test]
+    fn cfg_roundtrips_through_serde_yaml() {
+        let yaml = r#"
+api_key: "abc123def456"
+systems:
+  - slot: zolder
+    system_id: 12345
+  - slot: garage
+    system_id: 67890
+upload_interval: 5m
+"#;
+        let cfg: PvoutputCfg = serde_yaml::from_str(yaml).expect("parse yaml");
+        assert_eq!(cfg.api_key, "abc123def456");
+        assert_eq!(cfg.systems.len(), 2);
+        assert_eq!(cfg.systems[0].slot, "zolder");
+        assert_eq!(cfg.systems[0].system_id, 12345);
+        assert_eq!(cfg.systems[1].slot, "garage");
+        assert_eq!(cfg.upload_interval, std::time::Duration::from_secs(300));
+        // Roundtrip back to YAML; parse again and verify stable.
+        let dump = serde_yaml::to_string(&cfg).expect("encode yaml");
+        let cfg2: PvoutputCfg = serde_yaml::from_str(&dump).expect("re-parse");
+        assert_eq!(cfg.api_key, cfg2.api_key);
+        assert_eq!(cfg.systems.len(), cfg2.systems.len());
+    }
+
+    #[test]
+    fn cfg_defaults_upload_interval_to_5min() {
+        let yaml = r#"
+api_key: "xxx"
+systems:
+  - slot: zolder
+    system_id: 100
+"#;
+        let cfg: PvoutputCfg = serde_yaml::from_str(yaml).expect("parse yaml");
+        assert_eq!(cfg.upload_interval, std::time::Duration::from_secs(300));
+    }
+
+    #[test]
+    fn cfg_accepts_zero_systems() {
+        let yaml = "api_key: xxx\n";
+        let cfg: PvoutputCfg = serde_yaml::from_str(yaml).expect("parse yaml");
+        assert!(cfg.systems.is_empty());
+    }
 }
