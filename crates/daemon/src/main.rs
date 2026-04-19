@@ -429,6 +429,33 @@ async fn run_inverter(
     // logic below reads this to decide whether EHOSTDOWN is "expected,
     // inverter BT not yet re-advertised" or "probable sleep".
     let mut post_yield_deadline: Option<std::time::Instant> = None;
+
+    // Announced identities — published to for offline/online LWT
+    // transitions. Built from `inv_cfg.devices` up front in MIS mode
+    // so we can flip availability correctly even on first-ever connect
+    // failure. In single-device mode this is populated after a
+    // successful init with the real inverter serial.
+    let mut announced_identities: Vec<InverterIdentity> = Vec::new();
+    if !inv_cfg.devices.is_empty() {
+        for d in &inv_cfg.devices {
+            if d.password.is_some() {
+                warn!(
+                    slot = %d.slot,
+                    "DeviceCfg.password is currently ignored — broadcast logon uses \
+                     the parent inverters[].password for all devices on the piconet. \
+                     See DeviceCfg docs for rationale."
+                );
+            }
+            announced_identities.push(InverterIdentity {
+                slot: d.slot.clone(),
+                serial: d.app_serial,
+                model: d.model.clone(),
+                firmware: inv_cfg.firmware.clone(),
+                kind: DeviceKind::SolarInverter,
+            });
+        }
+    }
+
     loop {
         info!(slot = %inv_cfg.slot, "RFCOMM connect attempt");
         metrics.bt_reconnects_total.get_or_create(&lbl).inc();
@@ -453,13 +480,31 @@ async fn run_inverter(
                     host_down_streak += 1;
                     metrics.inverter_awake.get_or_create(&lbl).set(0);
                     if host_down_streak == 3 && !published_offline {
-                        let _ = publisher.publish_offline(&identity).await;
+                        // Flip EVERY announced device to offline, not
+                        // just the parent slot. In MIS mode the parent
+                        // slot has no HA subscribers — only the
+                        // per-device topics do.
+                        if announced_identities.is_empty() {
+                            let _ = publisher.publish_offline(&identity).await;
+                        } else {
+                            for id in &announced_identities {
+                                let _ = publisher.publish_offline(id).await;
+                            }
+                        }
                         published_offline = true;
                         info!(
                             slot = %inv_cfg.slot,
                             "inverter appears asleep — extending reconnect to {}s",
                             SLEEP_BACKOFF.as_secs()
                         );
+                    }
+                }
+                // Clear the post-yield deadline once it's past, so the
+                // Option correctly reflects "currently in grace" vs
+                // "window expired". Harmless if done repeatedly.
+                if let Some(d) = post_yield_deadline {
+                    if std::time::Instant::now() >= d {
+                        post_yield_deadline = None;
                     }
                 }
                 warn!(
@@ -536,6 +581,13 @@ async fn run_inverter(
                 info!(slot = %id.slot, serial = id.serial, "announced");
             }
             let _ = publisher.publish_online(id).await;
+        }
+        // Remember who's been announced so the next sleep-transition can
+        // publish_offline to the SAME topics HA is actually subscribed
+        // to. Legacy single-device mode fills this in here; MIS mode
+        // already populated it from config before the outer loop.
+        if announced_identities.is_empty() {
+            announced_identities = targets.iter().map(|(id, _, _)| id.clone()).collect();
         }
         published_offline = false;
 
