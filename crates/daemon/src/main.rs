@@ -253,6 +253,12 @@ async fn run_inverter(
     const MIN_BACKOFF: Duration = Duration::from_secs(2);
     const MAX_TRANSIENT_BACKOFF: Duration = Duration::from_secs(60);
     const SLEEP_BACKOFF: Duration = Duration::from_secs(600); // 10 min when inverter asleep
+    // After an intentional yield, the inverter's BT radio can take up to a
+    // minute to re-advertise. During that window EHOSTDOWN means "wait a
+    // bit", NOT "inverter asleep". Escalating to SLEEP_BACKOFF would lose
+    // 10 min of production data for a 30–60 s BT link-layer artifact.
+    const POST_YIELD_GRACE: Duration = Duration::from_secs(180);
+    const POST_YIELD_RETRY: Duration = Duration::from_secs(15);
 
     // Stable session identity: inverter tracks by app_serial. Same value
     // across reconnects → inverter sees us as the same client + accepts the
@@ -274,18 +280,31 @@ async fn run_inverter(
     let mut backoff = MIN_BACKOFF;
     let mut host_down_streak: u32 = 0;
     let mut published_offline = false;
+    // Set by the yield path just before it breaks the poll loop. Reconnect
+    // logic below reads this to decide whether EHOSTDOWN is "expected,
+    // inverter BT not yet re-advertised" or "probable sleep".
+    let mut post_yield_deadline: Option<std::time::Instant> = None;
     loop {
         info!(slot = %inv_cfg.slot, "RFCOMM connect attempt");
         metrics.bt_reconnects_total.get_or_create(&lbl).inc();
         let transport = match RfcommTransport::connect(inverter_bt, local_bt).await {
             Ok(t) => {
                 host_down_streak = 0;
+                post_yield_deadline = None;
                 metrics.inverter_awake.get_or_create(&lbl).set(1);
                 t
             }
             Err(e) => {
                 let err_str = e.to_string();
-                if err_str.contains("Host is down") || err_str.contains("os error 112") {
+                let is_host_down =
+                    err_str.contains("Host is down") || err_str.contains("os error 112");
+                // Inside the post-yield grace window: EHOSTDOWN is almost
+                // always the inverter's BT radio having not yet re-advertised
+                // after our clean disconnect. Don't flip to "asleep" mode.
+                let in_grace = post_yield_deadline
+                    .map(|d| std::time::Instant::now() < d)
+                    .unwrap_or(false);
+                if is_host_down && !in_grace {
                     host_down_streak += 1;
                     metrics.inverter_awake.get_or_create(&lbl).set(0);
                     if host_down_streak == 3 && !published_offline {
@@ -298,14 +317,20 @@ async fn run_inverter(
                         );
                     }
                 }
-                warn!(slot = %inv_cfg.slot, error = %e, streak = host_down_streak, "connect failed");
-                let wait = if host_down_streak >= 3 {
+                warn!(
+                    slot = %inv_cfg.slot, error = %e,
+                    streak = host_down_streak, grace = in_grace,
+                    "connect failed"
+                );
+                let wait = if in_grace && is_host_down {
+                    POST_YIELD_RETRY
+                } else if host_down_streak >= 3 {
                     SLEEP_BACKOFF
                 } else {
                     backoff
                 };
                 tokio::time::sleep(wait).await;
-                if host_down_streak < 3 {
+                if !in_grace && host_down_streak < 3 {
                     backoff = (backoff * 2).min(MAX_TRANSIENT_BACKOFF);
                 }
                 continue;
@@ -407,11 +432,17 @@ async fn run_inverter(
                     duration_secs = inv_cfg.yield_duration.as_secs(),
                     "yielding BT session for parallel-run peer"
                 );
-                // Send LOGOFF before dropping the socket, otherwise the
-                // inverter holds zombie session state for ~15 min and
-                // every reconnect inside that window fails EHOSTDOWN.
+                // Send LOGOFF before dropping the socket (keeps our app
+                // serial clean on the inverter's session table).
                 let _ = session.graceful_close().await;
                 tokio::time::sleep(inv_cfg.yield_duration).await;
+                // Post-yield grace: for the next POST_YIELD_GRACE window
+                // the reconnect path will treat EHOSTDOWN as "inverter BT
+                // still re-advertising" → keep retrying every
+                // POST_YIELD_RETRY instead of escalating to 10-min sleep.
+                post_yield_deadline = Some(
+                    std::time::Instant::now() + POST_YIELD_GRACE,
+                );
                 break; // outer loop reconnects
             }
 

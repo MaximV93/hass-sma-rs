@@ -3,6 +3,26 @@
 All notable changes to hass-sma-rs are tracked here. This project follows
 semantic-ish versioning; pre-1.0 is rapid iteration.
 
+## 0.1.43 — 2026-04-19 (post-yield grace window)
+
+### Fixed
+- **EHOSTDOWN after yield no longer escalates to 10-min sleep backoff.**
+  0.1.42 added a clean LOGOFF before the yield-window drop but that
+  alone did not fix the reconnect failure — observed live at 07:54
+  local: LOGOFF was sent, yield elapsed, 3× `Host is down` errors, and
+  the adaptive-backoff correctly-but-unhelpfully flagged the inverter
+  as "asleep" → 10 min of sensors `unavailable`. Root cause is BT
+  link-layer: the SB 3000HF-30's BT radio takes up to a minute to
+  re-advertise after a clean disconnect, even in bright daylight.
+- New `post_yield_deadline` state: after every intentional yield the
+  reconnect loop enters a 180 s grace window during which EHOSTDOWN
+  triggers a short `POST_YIELD_RETRY` (15 s) instead of incrementing
+  the sleep-streak. Cleared as soon as any connect succeeds. Grace
+  window also preserved until connect success, so if post-yield
+  EHOSTDOWN persists past 180 s the code falls back to the normal
+  sleep-detection ladder (genuine protocol breakage, not a yield
+  artifact).
+
 ## 0.1.42 — 2026-04-19 (sunrise bug hunt)
 
 ### Fixed
