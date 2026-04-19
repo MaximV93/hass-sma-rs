@@ -133,10 +133,42 @@ explicitly. Future phase: add a `probe` subcommand that runs a
 YAML to stdout, so users don't have to hunt for serials.
 
 ## Status
-Planned. No code yet. Current release (0.1.43) continues single-device
-against zolder only. The discovery-mitigation is the planned behavior
-documented in `docs/DISCOVER.md` — shape B is labeled as
-"NOT supported yet".
+Partially implemented (protocol + config primitives laid):
+
+- ✅ `Session::query_for_device(susy, serial, kind)` (commit ca09c7e)
+- ✅ `InverterCfg.devices: Vec<DeviceCfg>` + YAML schema (commit 875612f)
+- ✅ Empirical confirmation that garage replies to broadcast logon
+  (retcode 0x0001 seen from serial 2120121383 in logs, 2026-04-19)
+- ✅ `/data/app_serial_<slot>` persistence prevents restart-zombification
+  (0.1.45) — critical precondition for safe MIS experimentation
+- ⏳ **Daemon outer loop not yet MIS-aware** — still polls the
+  init-derived inverter_serial via the legacy `query(kind)` path.
+  Remaining work: build a `Vec<(InverterIdentity, susy, serial)>` at
+  session start, iterate per tick, publish to per-device MQTT slots.
+- ⏳ MQTT discovery announce-per-device not yet wired.
+
+Per 2026-04-19 empirical probing, the correct Shape-B config for
+Maxim's install once the remaining work lands will be:
+
+```yaml
+inverters:
+  - slot: repeater
+    bt_address: "00:80:25:21:32:35"
+    password: "<zolder+garage shared>"
+    devices:
+      - slot: zolder
+        app_serial: 2120121246
+        model: "SB 3000HF-30"
+      - slot: garage
+        app_serial: 2120121383
+        model: "SB 2000HF-30"
+```
+
+Note: earlier sections of this ADR suggested using the DeviceCfg's
+own password. Based on empirical evidence (both inverters rejected
+one logon for the same reason — 0x0001 "session active"), a SINGLE
+shared password at the InverterCfg level appears sufficient; the
+SBFspot MIS code agrees (one LogOnAll that reaches every device).
 
 ## References
 
