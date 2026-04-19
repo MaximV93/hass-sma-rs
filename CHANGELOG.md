@@ -3,6 +3,48 @@
 All notable changes to hass-sma-rs are tracked here. This project follows
 semantic-ish versioning; pre-1.0 is rapid iteration.
 
+## 0.1.50 — 2026-04-19 (4 new LRIs — CosPhi, nameplate, feed-in limit, active limit)
+
+### Added
+- **SpotCosPhi** (LRI range `0x00474800..0x004748FF`) — power factor
+  per phase. Live measurement, read every tick. Published as
+  `sensor.sbfspot_<slot>_cos_phi` (float 0.000–1.000). Useful for
+  grid-quality analysis, reactive-power tracking, DSO dispute
+  evidence.
+- **NominalAcPower** (LRI `0x00411E00..0x00411E19`) — inverter's
+  nameplate AC ceiling. Set at commissioning; static. One-shot query
+  at logon. Published as `sensor.sbfspot_<slot>_nominal_ac_power_w`.
+- **MaxFeedInPower** (LRI `0x00411F00..0x00411F19`) — configured
+  feed-in cap. Shows if the inverter is software-curtailed below its
+  nameplate (common in Belgium: 70% of kWp per Fluvius rule, or 50%
+  in certain grid-support tariffs). One-shot query at logon.
+  Published as `sensor.sbfspot_<slot>_max_feedin_w`.
+- **ActivePowerLimit** (LRI `0x00416500..0x00416519`) — live active-
+  power limit (where derating is clipping right now). Equals nominal
+  when healthy, lower under temperature / grid-voltage derating.
+  One-shot query at logon. Published as
+  `sensor.sbfspot_<slot>_active_power_limit_w`.
+
+All four are best-effort — a query that fails or returns no parseable
+record is silently skipped (debug log only). LRI codes are cited from
+SBFspot's `Types.h` but not yet live-validated against the real
+SB 3000HF-30 / 2000HF-30 — values may be absent, partial, or need
+range adjustment once empirical evidence lands.
+
+### New parsers + 3 regression tests
+- `parse_cosphi(body)` — scales i32 value by 1/1000, returns f32
+  absolute magnitude.
+- `parse_single_watts_record(body, lri_first, lri_last)` — generic
+  single-record filter used by the three nameplate/limit queries.
+- 84 workspace tests (+3: cosphi scale, cosphi leading-pf absolute,
+  lri-range filter). Clippy -D warnings clean.
+
+### 4 new MQTT sensors per device (33 → 37 per inverter)
+- `cos_phi` (power_factor class, 3 decimals)
+- `max_feedin_w` (power class, W)
+- `nominal_ac_power_w` (power class, W)
+- `active_power_limit_w` (power class, W)
+
 ## 0.1.49 — 2026-04-19 (self-audit follow-up — 6 phases)
 
 Everything from this morning's audit [telegram post] addressed.

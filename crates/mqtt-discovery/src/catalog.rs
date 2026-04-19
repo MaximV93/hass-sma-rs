@@ -321,6 +321,43 @@ pub fn sensor_catalog() -> &'static [SensorConfig] {
             icon: "mdi:counter",
             diagnostic: true,
         },
+        // 4 extended LRIs shipped 0.1.50. Experimental until live-validated.
+        SensorConfig {
+            name: "Power Factor",
+            key: "cos_phi",
+            device_class: Some("power_factor"),
+            state_class: Some("measurement"),
+            unit: None,
+            icon: "mdi:angle-acute",
+            diagnostic: false,
+        },
+        SensorConfig {
+            name: "Max Feed-In Power",
+            key: "max_feedin_w",
+            device_class: Some("power"),
+            state_class: Some("measurement"),
+            unit: Some("W"),
+            icon: "mdi:transmission-tower-export",
+            diagnostic: true,
+        },
+        SensorConfig {
+            name: "Nominal AC Power",
+            key: "nominal_ac_power_w",
+            device_class: Some("power"),
+            state_class: Some("measurement"),
+            unit: Some("W"),
+            icon: "mdi:tag",
+            diagnostic: true,
+        },
+        SensorConfig {
+            name: "Active Power Limit",
+            key: "active_power_limit_w",
+            device_class: Some("power"),
+            state_class: Some("measurement"),
+            unit: Some("W"),
+            icon: "mdi:gauge",
+            diagnostic: false,
+        },
     ]
 }
 

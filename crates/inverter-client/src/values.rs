@@ -228,6 +228,41 @@ pub fn parse_grid_frequency(body: &[u8]) -> Option<f32> {
     hz
 }
 
+/// Parse a CosPhi (power factor) reply. Returns the scalar as f32
+/// (1.000 = perfect real power, lower = more reactive).
+///
+/// LRI 0x00474800 range. SMA reports the signed scaled value so a
+/// capacitive (leading) power factor would come through negative;
+/// we expose the absolute magnitude per HA convention.
+pub fn parse_cosphi(body: &[u8]) -> Option<f32> {
+    let mut out: Option<f32> = None;
+    for_each_28_record(body, |lri, _dt, rec| {
+        if (0x0047_4800..=0x0047_48FF).contains(&lri) && out.is_none() {
+            // Scaled by 1000 per SBFspot convention.
+            out = i32_value_28(rec).map(|v| v.unsigned_abs() as f32 / 1000.0);
+        }
+    });
+    out
+}
+
+/// Parse a single-scalar watts reply. Used for the three
+/// power-limit / nameplate queries (MaxFeedInPower, NominalAcPower,
+/// ActivePowerLimit) which share the same record shape as the spot
+/// AC power queries but carry only one active record.
+///
+/// `lri_range` is the `(first, last)` pair matching the query's
+/// opcode tuple — used to discriminate against other records the
+/// inverter may include in a shared reply.
+pub fn parse_single_watts_record(body: &[u8], lri_first: u32, lri_last: u32) -> Option<u32> {
+    let mut out: Option<u32> = None;
+    for_each_28_record(body, |lri, _dt, rec| {
+        if lri >= lri_first && lri <= lri_last && out.is_none() {
+            out = u32_value_28(rec);
+        }
+    });
+    out
+}
+
 /// Parse a TypeLabel reply — returns the selected tag index.
 ///
 /// TypeLabel records are 40 bytes (not 28). Each carries up to 8
@@ -823,6 +858,47 @@ mod tests {
         assert_eq!(recs[0].text(), Some("MPP search"));
         assert_eq!(recs[1].tag(), 307);
         assert_eq!(recs[1].text(), Some("Normal operation"));
+    }
+
+    #[test]
+    fn parse_cosphi_decodes_scaled_thousandths() {
+        // LRI 0x00474801 (phase 1 slot), value 987 → 0.987 power factor.
+        let mut rec = [0u8; 28];
+        LittleEndian::write_u32(&mut rec[0..4], 0x00_47_48_01);
+        rec[16..20].copy_from_slice(&987i32.to_le_bytes());
+        let body = with_prefix(&rec);
+        let cp = parse_cosphi(&body).unwrap();
+        assert!((cp - 0.987).abs() < 1e-6, "got {cp}");
+    }
+
+    #[test]
+    fn parse_cosphi_absolute_value_for_leading_pf() {
+        // Negative (leading / capacitive) value should be reported
+        // as absolute magnitude.
+        let mut rec = [0u8; 28];
+        LittleEndian::write_u32(&mut rec[0..4], 0x00_47_48_01);
+        rec[16..20].copy_from_slice(&(-850i32).to_le_bytes());
+        let body = with_prefix(&rec);
+        assert!((parse_cosphi(&body).unwrap() - 0.850).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parse_single_watts_record_filters_by_lri_range() {
+        // Two records: one outside the filter range, one inside. Only
+        // the in-range one should be returned.
+        let mut r1 = [0u8; 28];
+        LittleEndian::write_u32(&mut r1[0..4], 0x00_11_22_01); // outside
+        r1[16..20].copy_from_slice(&999u32.to_le_bytes());
+        let mut r2 = [0u8; 28];
+        LittleEndian::write_u32(&mut r2[0..4], 0x00_41_1E_01); // nominal power range
+        r2[16..20].copy_from_slice(&3000u32.to_le_bytes());
+
+        let mut body = vec![0u8; 12];
+        body.extend_from_slice(&r1);
+        body.extend_from_slice(&r2);
+
+        let out = parse_single_watts_record(&body, 0x0041_1E00, 0x0041_1E19);
+        assert_eq!(out, Some(3000));
     }
 
     #[test]

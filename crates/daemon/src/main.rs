@@ -317,6 +317,16 @@ async fn publish_query_result(
                     .await;
             }
         }
+        QueryKind::SpotCosPhi => {
+            if let Some(cp) = inverter_client::values::parse_cosphi(body) {
+                let _ = publisher
+                    .publish_value(identity, "cos_phi", format!("{:.3}", cp))
+                    .await;
+                archiver
+                    .record(&identity.slot, identity.serial as i64, "cos_phi", cp as f64)
+                    .await;
+            }
+        }
         _ => {}
     }
 }
@@ -611,6 +621,7 @@ async fn run_inverter(
             QueryKind::SpotGridFrequency,
             QueryKind::DeviceStatus,
             QueryKind::GridRelayStatus,
+            QueryKind::SpotCosPhi,
         ];
 
         // One-shot event-log query per device (OPT-IN via
@@ -692,6 +703,36 @@ async fn run_inverter(
                         let _ = publisher.publish_value(id, "inverter_model", model).await;
                         id.model = model.to_string();
                     }
+                }
+            }
+
+            // 4 extended LRIs (0.1.50, experimental). Best-effort:
+            // any query that fails or yields no parseable value is
+            // silently skipped. These three are static config values
+            // so one-shot-per-session matches their nature.
+            use inverter_client::values::parse_single_watts_record;
+            if let Ok(body) = session
+                .query_for_device(*susy, *serial, QueryKind::NominalAcPower)
+                .await
+            {
+                if let Some(w) = parse_single_watts_record(&body, 0x0041_1E00, 0x0041_1E19) {
+                    let _ = publisher.publish_value(id, "nominal_ac_power_w", w).await;
+                }
+            }
+            if let Ok(body) = session
+                .query_for_device(*susy, *serial, QueryKind::MaxFeedInPower)
+                .await
+            {
+                if let Some(w) = parse_single_watts_record(&body, 0x0041_1F00, 0x0041_1F19) {
+                    let _ = publisher.publish_value(id, "max_feedin_w", w).await;
+                }
+            }
+            if let Ok(body) = session
+                .query_for_device(*susy, *serial, QueryKind::ActivePowerLimit)
+                .await
+            {
+                if let Some(w) = parse_single_watts_record(&body, 0x0041_6500, 0x0041_6519) {
+                    let _ = publisher.publish_value(id, "active_power_limit_w", w).await;
                 }
             }
         }

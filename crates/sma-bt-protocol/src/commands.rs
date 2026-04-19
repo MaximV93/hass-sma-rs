@@ -43,6 +43,19 @@ pub enum QueryKind {
     BatteryInfo,
     /// Grid export total. LRI METERING_GRID_MS_TOT_W.
     MeteringGridTotalW,
+    /// Power factor (cos φ) per phase. LRI SPOT_COSPHI range.
+    /// Value at the 28-byte record offset is a signed i32 scaled by 1000.
+    SpotCosPhi,
+    /// Configured feed-in power cap. Single value in watts, set at
+    /// commissioning. Useful for detecting curtailment (e.g. Belgian
+    /// grid rules often clamp at 70% of nameplate).
+    MaxFeedInPower,
+    /// Nameplate AC power ceiling. E.g. 3000 for SB 3000HF-30.
+    NominalAcPower,
+    /// Live active-power limit — where derating is clipping right
+    /// now. Equals NominalAcPower when healthy, lower when the
+    /// inverter is reducing output (temperature, grid voltage, etc).
+    ActivePowerLimit,
 }
 
 impl QueryKind {
@@ -66,6 +79,13 @@ impl QueryKind {
             BatteryChargeStatus => (0x5100_0200, 0x0029_5A00, 0x0029_5AFF),
             BatteryInfo => (0x5100_0200, 0x0049_1E00, 0x0049_5DFF),
             MeteringGridTotalW => (0x5100_0200, 0x0046_3600, 0x0046_3669),
+            // LRI refs from SBFspot Types.h. Each clamped to a narrow
+            // range (first..last) so the inverter only returns the
+            // specific record we care about.
+            SpotCosPhi => (0x5100_0200, 0x0047_4800, 0x0047_48FF),
+            MaxFeedInPower => (0x5100_0200, 0x0041_1F00, 0x0041_1F19),
+            NominalAcPower => (0x5100_0200, 0x0041_1E00, 0x0041_1E19),
+            ActivePowerLimit => (0x5100_0200, 0x0041_6500, 0x0041_6519),
         }
     }
 }
