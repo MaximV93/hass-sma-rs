@@ -9,9 +9,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Labels common to per-inverter metrics.
-#[derive(
-    Clone, Debug, Eq, Hash, PartialEq, prometheus_client::encoding::EncodeLabelSet,
-)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, prometheus_client::encoding::EncodeLabelSet)]
 pub struct InverterLabels {
     pub slot: String,
 }
@@ -86,9 +84,8 @@ impl MetricsRegistry {
             last_successful_poll_unix.clone(),
         );
 
-        let new_float_gauge = || {
-            Family::<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>::default()
-        };
+        let new_float_gauge =
+            || Family::<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>::default();
 
         let ac_power_watts = new_float_gauge();
         registry.register(
@@ -188,7 +185,9 @@ mod tests {
     async fn encode_includes_all_families() {
         let m = MetricsRegistry::new();
         m.polls_total
-            .get_or_create(&InverterLabels { slot: "zolder".into() })
+            .get_or_create(&InverterLabels {
+                slot: "zolder".into(),
+            })
             .inc();
         let text = m.encode().await;
         assert!(text.contains("sma_polls_total"));

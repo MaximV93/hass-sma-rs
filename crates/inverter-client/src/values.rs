@@ -332,16 +332,14 @@ pub struct AcVoltageCurrent {
 /// × 1000 → A.
 pub fn parse_spot_ac_voltage(body: &[u8]) -> AcVoltageCurrent {
     let mut out = AcVoltageCurrent::default();
-    for_each_28_record(body, |lri, _dt, rec| {
-        match lri {
-            lri::GRID_MS_VPHS_A => out.uac1_v = i32_value_28(rec).map(|v| v as f32 / 100.0),
-            lri::GRID_MS_VPHS_B => out.uac2_v = i32_value_28(rec).map(|v| v as f32 / 100.0),
-            lri::GRID_MS_VPHS_C => out.uac3_v = i32_value_28(rec).map(|v| v as f32 / 100.0),
-            lri::GRID_MS_APHS_A => out.iac1_a = i32_value_28(rec).map(|v| v as f32 / 1000.0),
-            lri::GRID_MS_APHS_B => out.iac2_a = i32_value_28(rec).map(|v| v as f32 / 1000.0),
-            lri::GRID_MS_APHS_C => out.iac3_a = i32_value_28(rec).map(|v| v as f32 / 1000.0),
-            _ => {}
-        }
+    for_each_28_record(body, |lri, _dt, rec| match lri {
+        lri::GRID_MS_VPHS_A => out.uac1_v = i32_value_28(rec).map(|v| v as f32 / 100.0),
+        lri::GRID_MS_VPHS_B => out.uac2_v = i32_value_28(rec).map(|v| v as f32 / 100.0),
+        lri::GRID_MS_VPHS_C => out.uac3_v = i32_value_28(rec).map(|v| v as f32 / 100.0),
+        lri::GRID_MS_APHS_A => out.iac1_a = i32_value_28(rec).map(|v| v as f32 / 1000.0),
+        lri::GRID_MS_APHS_B => out.iac2_a = i32_value_28(rec).map(|v| v as f32 / 1000.0),
+        lri::GRID_MS_APHS_C => out.iac3_a = i32_value_28(rec).map(|v| v as f32 / 1000.0),
+        _ => {}
     });
     out
 }
@@ -688,10 +686,9 @@ mod tests {
     fn real_nighttime_nan_body_returns_none() {
         // Exact bytes captured from zolder 2026-04-17T23:22 SpotAcTotalPower
         let body: Vec<u8> = vec![
-            0x01, 0x02, 0x00, 0x51, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x01, 0x3f, 0x26, 0x40, 0x84, 0x7f, 0xe2, 0x69, 0x00, 0x00, 0x00, 0x80,
-            0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x80,
-            0x01, 0x00, 0x00, 0x00,
+            0x01, 0x02, 0x00, 0x51, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x3f,
+            0x26, 0x40, 0x84, 0x7f, 0xe2, 0x69, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x80,
+            0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x80, 0x01, 0x00, 0x00, 0x00,
         ];
         let r = parse_spot_ac_total_power(&body);
         assert_eq!(r.pac_total_w, None, "NaN must yield None not i32::MIN");

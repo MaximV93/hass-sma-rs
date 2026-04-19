@@ -324,8 +324,8 @@ impl<T: Transport> Session<T> {
         // discovery_packet` against 0000-send.hex.
         let ver_wire = FrameBuilder::new_with_kind(
             FrameKind::L1Only,
-            [0u8; 6],               // src = zeros (matches capture)
-            [1, 0, 0, 0, 0, 0],     // dst = "1.0.0" version
+            [0u8; 6],           // src = zeros (matches capture)
+            [1, 0, 0, 0, 0, 0], // dst = "1.0.0" version
             0x0201,
         )
         .extend(b"ver\r\n")
@@ -344,11 +344,15 @@ impl<T: Transport> Session<T> {
             })?;
         let hello = Frame::parse(&hello_bytes)?;
         if hello.control != 0x0002 {
-            return Err(SessionError::Protocol { phase: "hello-ctrl" });
+            return Err(SessionError::Protocol {
+                phase: "hello-ctrl",
+            });
         }
         // Firmware protocol version at raw byte 19, NetID at byte 22.
         if hello_bytes.len() < 23 {
-            return Err(SessionError::Protocol { phase: "hello-short" });
+            return Err(SessionError::Protocol {
+                phase: "hello-short",
+            });
         }
         let fw = hello_bytes[19];
         if fw < 4 {
@@ -377,9 +381,7 @@ impl<T: Transport> Session<T> {
         debug!("echo sent");
 
         // ── Step 3: recv topology (ctrl=0x0005), skip any 0x000a
-        let topology_bytes = self
-            .recv_until_l1_ctrl(0x0005, "topology")
-            .await?;
+        let topology_bytes = self.recv_until_l1_ctrl(0x0005, "topology").await?;
         // Parse topology payload for peer BT addresses + flags so user can
         // see all devices on the piconet (useful for discovering zonneveld
         // etc. when configuring additional inverters). Each device entry
@@ -541,7 +543,9 @@ impl<T: Transport> Session<T> {
                             serial = rej.app_serial,
                             "no inverter accepted logon"
                         );
-                        return Err(SessionError::LogonFailed { code: rej.error_code });
+                        return Err(SessionError::LogonFailed {
+                            code: rej.error_code,
+                        });
                     }
                     return Err(SessionError::Silent { phase: "logon" });
                 }

@@ -37,8 +37,11 @@ serde_yaml = "0.9"
 thiserror = "2"
 anyhow = "1"
 
-# MQTT
-rumqttc = "0.24"
+# MQTT — disable default features so the rustls / tokio-rustls /
+# rustls-webpki stack is NOT pulled in. We use plain TCP to the local
+# Mosquitto broker inside HA (no TLS). Avoids RUSTSEC advisories on
+# unused transitive deps.
+rumqttc = { version = "0.25", default-features = false }
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "time", "macros"] }

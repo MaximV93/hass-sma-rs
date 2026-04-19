@@ -102,23 +102,35 @@ async fn publish_query_result(
             let r = parse_spot_ac_voltage(body);
             if let Some(v) = r.uac1_v {
                 metrics.ac_voltage_l1.get_or_create(lbl).set(v as f64);
-                let _ = publisher.publish_value(identity, "ac_voltage_l1", format!("{:.2}", v)).await;
+                let _ = publisher
+                    .publish_value(identity, "ac_voltage_l1", format!("{:.2}", v))
+                    .await;
             }
             if let Some(v) = r.uac2_v {
-                let _ = publisher.publish_value(identity, "ac_voltage_l2", format!("{:.2}", v)).await;
+                let _ = publisher
+                    .publish_value(identity, "ac_voltage_l2", format!("{:.2}", v))
+                    .await;
             }
             if let Some(v) = r.uac3_v {
-                let _ = publisher.publish_value(identity, "ac_voltage_l3", format!("{:.2}", v)).await;
+                let _ = publisher
+                    .publish_value(identity, "ac_voltage_l3", format!("{:.2}", v))
+                    .await;
             }
             if let Some(a) = r.iac1_a {
                 metrics.ac_current_l1.get_or_create(lbl).set(a as f64);
-                let _ = publisher.publish_value(identity, "ac_current_l1", format!("{:.3}", a)).await;
+                let _ = publisher
+                    .publish_value(identity, "ac_current_l1", format!("{:.3}", a))
+                    .await;
             }
             if let Some(a) = r.iac2_a {
-                let _ = publisher.publish_value(identity, "ac_current_l2", format!("{:.3}", a)).await;
+                let _ = publisher
+                    .publish_value(identity, "ac_current_l2", format!("{:.3}", a))
+                    .await;
             }
             if let Some(a) = r.iac3_a {
-                let _ = publisher.publish_value(identity, "ac_current_l3", format!("{:.3}", a)).await;
+                let _ = publisher
+                    .publish_value(identity, "ac_current_l3", format!("{:.3}", a))
+                    .await;
             }
         }
         QueryKind::SpotDcPower => {
@@ -135,16 +147,24 @@ async fn publish_query_result(
         QueryKind::SpotDcVoltage => {
             let r = parse_spot_dc_voltage(body);
             if let Some(v) = r.udc1_v {
-                let _ = publisher.publish_value(identity, "dc_voltage_s1", format!("{:.2}", v)).await;
+                let _ = publisher
+                    .publish_value(identity, "dc_voltage_s1", format!("{:.2}", v))
+                    .await;
             }
             if let Some(v) = r.udc2_v {
-                let _ = publisher.publish_value(identity, "dc_voltage_s2", format!("{:.2}", v)).await;
+                let _ = publisher
+                    .publish_value(identity, "dc_voltage_s2", format!("{:.2}", v))
+                    .await;
             }
             if let Some(a) = r.idc1_a {
-                let _ = publisher.publish_value(identity, "dc_current_s1", format!("{:.3}", a)).await;
+                let _ = publisher
+                    .publish_value(identity, "dc_current_s1", format!("{:.3}", a))
+                    .await;
             }
             if let Some(a) = r.idc2_a {
-                let _ = publisher.publish_value(identity, "dc_current_s2", format!("{:.3}", a)).await;
+                let _ = publisher
+                    .publish_value(identity, "dc_current_s2", format!("{:.3}", a))
+                    .await;
             }
         }
         QueryKind::EnergyProduction => {
@@ -152,16 +172,29 @@ async fn publish_query_result(
             if let Some(wh) = day {
                 metrics.energy_today_wh.get_or_create(lbl).set(wh as f64);
                 let _ = publisher
-                    .publish_value(identity, "energy_today", format!("{:.3}", wh as f64 / 1000.0))
+                    .publish_value(
+                        identity,
+                        "energy_today",
+                        format!("{:.3}", wh as f64 / 1000.0),
+                    )
                     .await;
                 archiver
-                    .record(&identity.slot, identity.serial as i64, "energy_today_wh", wh as f64)
+                    .record(
+                        &identity.slot,
+                        identity.serial as i64,
+                        "energy_today_wh",
+                        wh as f64,
+                    )
                     .await;
             }
             if let Some(wh) = total {
                 metrics.energy_lifetime_wh.get_or_create(lbl).set(wh as f64);
                 let _ = publisher
-                    .publish_value(identity, "energy_lifetime", format!("{:.3}", wh as f64 / 1000.0))
+                    .publish_value(
+                        identity,
+                        "energy_lifetime",
+                        format!("{:.3}", wh as f64 / 1000.0),
+                    )
                     .await;
                 archiver
                     .record(
@@ -177,42 +210,73 @@ async fn publish_query_result(
             let r = parse_operation_time(body);
             if let Some(s) = r.total_op_time_s {
                 let _ = publisher
-                    .publish_value(identity, "operation_time", format!("{:.2}", s as f64 / 3600.0))
+                    .publish_value(
+                        identity,
+                        "operation_time",
+                        format!("{:.2}", s as f64 / 3600.0),
+                    )
                     .await;
             }
             if let Some(s) = r.feed_in_time_s {
                 let _ = publisher
-                    .publish_value(identity, "feed_in_time", format!("{:.2}", s as f64 / 3600.0))
+                    .publish_value(
+                        identity,
+                        "feed_in_time",
+                        format!("{:.2}", s as f64 / 3600.0),
+                    )
                     .await;
             }
         }
         QueryKind::InverterTemperature => {
             if let Some(c) = parse_inverter_temperature(body) {
-                metrics.inverter_temperature_c.get_or_create(lbl).set(c as f64);
-                let _ = publisher.publish_value(identity, "temperature", format!("{:.2}", c)).await;
+                metrics
+                    .inverter_temperature_c
+                    .get_or_create(lbl)
+                    .set(c as f64);
+                let _ = publisher
+                    .publish_value(identity, "temperature", format!("{:.2}", c))
+                    .await;
                 archiver
-                    .record(&identity.slot, identity.serial as i64, "temperature_c", c as f64)
+                    .record(
+                        &identity.slot,
+                        identity.serial as i64,
+                        "temperature_c",
+                        c as f64,
+                    )
                     .await;
             }
         }
         QueryKind::SpotGridFrequency => {
             if let Some(hz) = parse_grid_frequency(body) {
                 metrics.grid_frequency_hz.get_or_create(lbl).set(hz as f64);
-                let _ = publisher.publish_value(identity, "grid_frequency", format!("{:.2}", hz)).await;
+                let _ = publisher
+                    .publish_value(identity, "grid_frequency", format!("{:.2}", hz))
+                    .await;
                 archiver
-                    .record(&identity.slot, identity.serial as i64, "grid_frequency_hz", hz as f64)
+                    .record(
+                        &identity.slot,
+                        identity.serial as i64,
+                        "grid_frequency_hz",
+                        hz as f64,
+                    )
                     .await;
             }
         }
         QueryKind::DeviceStatus => {
             if let Some(tag) = parse_device_status(body) {
-                let _ = publisher.publish_value(identity, "inverter_state", status_text(tag)).await;
+                let _ = publisher
+                    .publish_value(identity, "inverter_state", status_text(tag))
+                    .await;
             }
         }
         QueryKind::GridRelayStatus => {
             if let Some(closed) = parse_grid_relay(body) {
                 let _ = publisher
-                    .publish_value(identity, "grid_relay", if closed { "closed" } else { "open" })
+                    .publish_value(
+                        identity,
+                        "grid_relay",
+                        if closed { "closed" } else { "open" },
+                    )
                     .await;
             }
         }
@@ -289,10 +353,10 @@ async fn run_inverter(
     const MIN_BACKOFF: Duration = Duration::from_secs(2);
     const MAX_TRANSIENT_BACKOFF: Duration = Duration::from_secs(60);
     const SLEEP_BACKOFF: Duration = Duration::from_secs(600); // 10 min when inverter asleep
-    // After an intentional yield, the inverter's BT radio can take up to a
-    // minute to re-advertise. During that window EHOSTDOWN means "wait a
-    // bit", NOT "inverter asleep". Escalating to SLEEP_BACKOFF would lose
-    // 10 min of production data for a 30–60 s BT link-layer artifact.
+                                                              // After an intentional yield, the inverter's BT radio can take up to a
+                                                              // minute to re-advertise. During that window EHOSTDOWN means "wait a
+                                                              // bit", NOT "inverter asleep". Escalating to SLEEP_BACKOFF would lose
+                                                              // 10 min of production data for a 30–60 s BT link-layer artifact.
     const POST_YIELD_GRACE: Duration = Duration::from_secs(180);
     const POST_YIELD_RETRY: Duration = Duration::from_secs(15);
 
@@ -463,7 +527,10 @@ async fn run_inverter(
         // One-shot identity queries, run once per target after logon.
         // In MIS mode each device's firmware/model comes from its own reply.
         for (id, susy, serial) in targets.iter_mut() {
-            if let Ok(body) = session.query_for_device(*susy, *serial, QueryKind::SoftwareVersion).await {
+            if let Ok(body) = session
+                .query_for_device(*susy, *serial, QueryKind::SoftwareVersion)
+                .await
+            {
                 if let Some(ver) = parse_software_version(&body) {
                     let _ = publisher.publish_value(id, "firmware_version", &ver).await;
                     id.firmware = ver;
@@ -473,7 +540,10 @@ async fn run_inverter(
             let _ = publisher
                 .publish_value(id, "inverter_model", &id.model)
                 .await;
-            if let Ok(body) = session.query_for_device(*susy, *serial, QueryKind::TypeLabel).await {
+            if let Ok(body) = session
+                .query_for_device(*susy, *serial, QueryKind::TypeLabel)
+                .await
+            {
                 if let Some(tag) = parse_type_label_raw(&body) {
                     if let Some(model) = type_label_text(tag) {
                         let _ = publisher.publish_value(id, "inverter_model", model).await;
@@ -507,9 +577,7 @@ async fn run_inverter(
                 // the reconnect path will treat EHOSTDOWN as "inverter BT
                 // still re-advertising" → keep retrying every
                 // POST_YIELD_RETRY instead of escalating to 10-min sleep.
-                post_yield_deadline = Some(
-                    std::time::Instant::now() + POST_YIELD_GRACE,
-                );
+                post_yield_deadline = Some(std::time::Instant::now() + POST_YIELD_GRACE);
                 break; // outer loop reconnects
             }
 
@@ -520,7 +588,10 @@ async fn run_inverter(
                 for kind in per_tick_queries.iter() {
                     match session.query_for_device(*susy, *serial, *kind).await {
                         Ok(body) => {
-                            publish_query_result(*kind, &body, &publisher, id, &metrics, &lbl, &archiver).await
+                            publish_query_result(
+                                *kind, &body, &publisher, id, &metrics, &lbl, &archiver,
+                            )
+                            .await
                         }
                         Err(e) => {
                             metrics.poll_errors_total.get_or_create(&lbl).inc();
@@ -536,15 +607,22 @@ async fn run_inverter(
                     }
                 }
                 let now = chrono::Utc::now();
-                let _ = publisher.publish_value(id, "last_poll", now.to_rfc3339()).await;
+                let _ = publisher
+                    .publish_value(id, "last_poll", now.to_rfc3339())
+                    .await;
                 let _ = publisher.publish_value(id, "poll_status", "ok").await;
                 let uptime_s = (now - session_start).num_seconds();
-                let _ = publisher.publish_value(id, "session_uptime", uptime_s).await;
+                let _ = publisher
+                    .publish_value(id, "session_uptime", uptime_s)
+                    .await;
             }
 
             if cycle_ok {
                 let now = chrono::Utc::now();
-                metrics.last_successful_poll_unix.get_or_create(&lbl).set(now.timestamp());
+                metrics
+                    .last_successful_poll_unix
+                    .get_or_create(&lbl)
+                    .set(now.timestamp());
             } else {
                 warn!(
                     slot = %inv_cfg.slot,
@@ -573,10 +651,7 @@ async fn main() -> Result<()> {
         "daemon config loaded"
     );
 
-    let local_bt = cfg
-        .local_bt_address
-        .as_deref()
-        .and_then(parse_bt_mac);
+    let local_bt = cfg.local_bt_address.as_deref().and_then(parse_bt_mac);
 
     let mqtt_base = MqttClientConfig {
         host: cfg.mqtt.host.clone(),

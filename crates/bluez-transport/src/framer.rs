@@ -71,8 +71,8 @@ impl FrameReader {
                 let hdr_cks = self.in_progress[3];
                 let expected_cks = FRAME_DELIMITER ^ len_lo ^ len_hi;
 
-                let valid = hdr_cks == expected_cks
-                    && (MIN_FRAME_LEN..=MAX_FRAME_LEN).contains(&declared);
+                let valid =
+                    hdr_cks == expected_cks && (MIN_FRAME_LEN..=MAX_FRAME_LEN).contains(&declared);
 
                 if !valid {
                     // Resync: drop the leading 0x7E and replay the remaining

@@ -79,8 +79,7 @@ fn all_captured_frames_parse() {
         if raw[0] == 0x7E && raw.get(1..5) == Some(&[0xFF, 0x03, 0x60, 0x65]) {
             match parse_l2_only_blob(&raw) {
                 Ok(_) => l2_only += 1,
-                Err(e) => l1_failed
-                    .push(format!("{}: L2 blob: {}", path.display(), e)),
+                Err(e) => l1_failed.push(format!("{}: L2 blob: {}", path.display(), e)),
             }
             continue;
         }
@@ -131,10 +130,12 @@ fn frame_builder_matches_captured_discovery_packet() {
     b.extend(b"ver\r\n");
     let wire = b.build();
 
-    let fixture = hex_line_to_bytes(
-        "7e 17 00 69 00 00 00 00 00 00 01 00 00 00 00 00 01 02 76 65 72 0d 0a",
+    let fixture =
+        hex_line_to_bytes("7e 17 00 69 00 00 00 00 00 00 01 00 00 00 00 00 01 02 76 65 72 0d 0a");
+    assert_eq!(
+        wire, fixture,
+        "built frame must match captured bytes exactly"
     );
-    assert_eq!(wire, fixture, "built frame must match captured bytes exactly");
 }
 
 /// Contract test: an L2-wrapped frame the FrameBuilder emits must be
@@ -155,7 +156,8 @@ fn l2_frame_has_separator_and_roundtrips() {
     let payload = [
         0xFF, 0x03, 0x60, 0x65, 0x09, 0xA0, // sig + longwords/ctrl
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // broadcast dst
-        0x00, 0x00, 0x7E, 0x00, 0x50, 0xFB, 0x2D, 0x3B, // carries a 0x7E that MUST get stuffed
+        0x00, 0x00, 0x7E, 0x00, 0x50, 0xFB, 0x2D,
+        0x3B, // carries a 0x7E that MUST get stuffed
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // padding
     ];
     b.extend(&payload);

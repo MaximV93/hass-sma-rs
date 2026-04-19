@@ -74,13 +74,7 @@ impl CsvSink {
                 .await
                 .map_err(StorageError::Io)?;
         }
-        let line = format!(
-            "{},{},{},{}\n",
-            time.to_rfc3339(),
-            serial,
-            metric,
-            value
-        );
+        let line = format!("{},{},{},{}\n", time.to_rfc3339(), serial, metric, value);
         f.write_all(line.as_bytes())
             .await
             .map_err(StorageError::Io)?;

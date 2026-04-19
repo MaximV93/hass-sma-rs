@@ -6,8 +6,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 /// back to `info`. When `compact=true`, use human-readable output instead
 /// of JSON (useful locally; production should keep JSON).
 pub fn init_tracing(compact: bool) {
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let registry = tracing_subscriber::registry().with(filter);
     if compact {
         registry.with(fmt::layer().compact()).init();

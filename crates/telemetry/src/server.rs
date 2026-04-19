@@ -72,7 +72,9 @@ mod tests {
         let metrics = MetricsRegistry::new();
         metrics
             .polls_total
-            .get_or_create(&crate::metrics::InverterLabels { slot: "test".into() })
+            .get_or_create(&crate::metrics::InverterLabels {
+                slot: "test".into(),
+            })
             .inc();
         let m_clone = metrics.clone();
 

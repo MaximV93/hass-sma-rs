@@ -118,18 +118,17 @@ impl Frame {
         //
         // We accept both on parse. Builder emits shape A unconditionally —
         // mirroring what SBFspot sends and what live inverters accept.
-        let l2_sig_offset = if raw.len() >= 22
-            && LittleEndian::read_u32(&raw[18..22]) == BT_L2_SIGNATURE
-        {
-            Some(18)
-        } else if raw.len() >= 23
-            && raw[18] == FRAME_DELIMITER
-            && LittleEndian::read_u32(&raw[19..23]) == BT_L2_SIGNATURE
-        {
-            Some(19)
-        } else {
-            None
-        };
+        let l2_sig_offset =
+            if raw.len() >= 22 && LittleEndian::read_u32(&raw[18..22]) == BT_L2_SIGNATURE {
+                Some(18)
+            } else if raw.len() >= 23
+                && raw[18] == FRAME_DELIMITER
+                && LittleEndian::read_u32(&raw[19..23]) == BT_L2_SIGNATURE
+            {
+                Some(19)
+            } else {
+                None
+            };
 
         if let Some(sig_off) = l2_sig_offset {
             if (declared_len as usize) != raw.len() {
@@ -146,7 +145,11 @@ impl Frame {
             // `has_trailer` distinguishes them so callers get a consistent
             // unstuffed payload regardless.
             let has_trailer = *raw.last().unwrap() == FRAME_DELIMITER;
-            let stuffed_end = if has_trailer { raw.len() - 1 } else { raw.len() };
+            let stuffed_end = if has_trailer {
+                raw.len() - 1
+            } else {
+                raw.len()
+            };
             let stuffed = &raw[sig_off..stuffed_end];
             let unstuffed = unstuff(stuffed)?;
             let payload = if has_trailer {
@@ -314,13 +317,19 @@ fn stuff(data: &[u8]) -> Vec<u8> {
 pub fn parse_l2_only_blob(raw: &[u8]) -> Result<Vec<u8>, ParseError> {
     // Must begin with 0x7E + L2 signature
     if raw.len() < 6 {
-        return Err(ParseError::TooShort { got: raw.len(), need: 6 });
+        return Err(ParseError::TooShort {
+            got: raw.len(),
+            need: 6,
+        });
     }
     if raw[0] != FRAME_DELIMITER {
         return Err(ParseError::MissingStart { byte: raw[0] });
     }
     if raw[1..5] != [0xFF, 0x03, 0x60, 0x65] {
-        return Err(ParseError::HeaderChecksum { got: raw[1], expected: 0xFF });
+        return Err(ParseError::HeaderChecksum {
+            got: raw[1],
+            expected: 0xFF,
+        });
     }
 
     // Find the next 0x7E after position 5 — that's the end of the stuffed body.
@@ -337,7 +346,10 @@ pub fn parse_l2_only_blob(raw: &[u8]) -> Result<Vec<u8>, ParseError> {
     let stuffed = &raw[1..end];
     let unstuffed = unstuff(stuffed)?;
     if unstuffed.len() < 2 {
-        return Err(ParseError::TooShort { got: unstuffed.len(), need: 2 });
+        return Err(ParseError::TooShort {
+            got: unstuffed.len(),
+            need: 2,
+        });
     }
     // Last 2 bytes are the FCS trailer — strip.
     let (body, _fcs) = unstuffed.split_at(unstuffed.len() - 2);
