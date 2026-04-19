@@ -102,6 +102,30 @@ pub struct InverterCfg {
     pub yield_every: u32,
     #[serde(with = "humantime_serde", default = "default_yield_duration")]
     pub yield_duration: Duration,
+    /// MIS multi-device list. When present, this `InverterCfg` targets a
+    /// BT-repeater on `bt_address`; each entry in `devices` is a distinct
+    /// SMA inverter behind that repeater, addressed by app_serial in each
+    /// request. Legacy single-device config (devices:[]) stays
+    /// backwards-compatible. See ADR 0005.
+    #[serde(default)]
+    pub devices: Vec<DeviceCfg>,
+}
+
+/// A single MIS-reachable device behind a BT repeater.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DeviceCfg {
+    /// Slot suffix — used for MQTT namespace (`sbfspot_<slot>_*`), file
+    /// names, log tags.
+    pub slot: String,
+    /// The device's internal SMA serial (seen in logon replies).
+    pub app_serial: u32,
+    /// Optional per-device password override; defaults to the parent
+    /// `InverterCfg.password`.
+    #[serde(default)]
+    pub password: Option<String>,
+    /// Optional type hint — same semantics as `InverterCfg.model`.
+    #[serde(default = "default_model")]
+    pub model: String,
 }
 
 fn default_mqtt_port() -> u16 {
@@ -168,6 +192,41 @@ local_bt_address: "04:42:1A:5A:37:74"
         assert_eq!(cfg.inverters[0].slot, "zolder");
         assert_eq!(cfg.inverters[0].poll_interval, Duration::from_secs(5));
         assert_eq!(cfg.local_bt_address.as_deref(), Some("04:42:1A:5A:37:74"));
+    }
+
+    #[test]
+    fn parses_mis_devices_list() {
+        let yaml = r#"
+mqtt:
+  host: core-mosquitto
+inverters:
+  - slot: repeater
+    bt_address: "00:80:25:21:32:35"
+    password: "0000"
+    devices:
+      - slot: zolder
+        app_serial: 2120121246
+        model: "SB 3000HF-30"
+      - slot: garage
+        app_serial: 2120121383
+        password: "9999"
+        model: "SB 2000HF-30"
+"#;
+        let cfg = DaemonConfig::from_yaml(yaml).unwrap();
+        let inv = &cfg.inverters[0];
+        assert_eq!(inv.devices.len(), 2);
+        assert_eq!(inv.devices[0].slot, "zolder");
+        assert_eq!(inv.devices[0].app_serial, 2120121246);
+        assert_eq!(inv.devices[0].password, None); // falls back to parent
+        assert_eq!(inv.devices[1].slot, "garage");
+        assert_eq!(inv.devices[1].app_serial, 2120121383);
+        assert_eq!(inv.devices[1].password.as_deref(), Some("9999"));
+    }
+
+    #[test]
+    fn devices_defaults_to_empty() {
+        let cfg = DaemonConfig::from_yaml(YAML).unwrap();
+        assert!(cfg.inverters[0].devices.is_empty());
     }
 
     #[test]
