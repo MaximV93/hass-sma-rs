@@ -8,10 +8,35 @@ use prometheus_client::{
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-/// Labels common to per-inverter metrics.
+/// Session-level labels (one series per `inverters:` YAML entry — i.e.
+/// one per RFCOMM session). Used for connection lifecycle metrics
+/// that don't have a per-device split: reconnects, handshake errors,
+/// session-wide aliveness.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, prometheus_client::encoding::EncodeLabelSet)]
 pub struct InverterLabels {
     pub slot: String,
+}
+
+/// Per-device labels. In legacy single-device mode `device == slot` so
+/// existing Grafana queries using `{slot="zolder"}` still work after
+/// joining on either label. In MIS mode `slot` = the repeater's
+/// config slot, `device` = the actual inverter slot (zolder / garage).
+#[derive(Clone, Debug, Eq, Hash, PartialEq, prometheus_client::encoding::EncodeLabelSet)]
+pub struct DeviceLabels {
+    pub slot: String,
+    pub device: String,
+}
+
+impl DeviceLabels {
+    /// Helper: construct for a device whose slot == its RFCOMM
+    /// session's slot (the legacy single-device case).
+    pub fn same(s: impl Into<String>) -> Self {
+        let s = s.into();
+        Self {
+            slot: s.clone(),
+            device: s,
+        }
+    }
 }
 
 /// The daemon's canonical metric set. Cheap to clone (Arc internally).
@@ -25,17 +50,17 @@ pub struct MetricsRegistry {
     pub handshake_errors_total: Family<InverterLabels, Counter>,
     pub inverter_awake: Family<InverterLabels, Gauge<i64>>,
     pub last_successful_poll_unix: Family<InverterLabels, Gauge<i64>>,
-    // --- AC/DC live values ---
-    pub ac_power_watts: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
-    pub ac_voltage_l1: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
-    pub ac_current_l1: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
-    pub grid_frequency_hz: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
-    pub dc_power_s1_watts: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
-    pub dc_power_s2_watts: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
-    pub inverter_temperature_c: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
-    // --- Energy counters (monotonically increasing) ---
-    pub energy_today_wh: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
-    pub energy_lifetime_wh: Family<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    // --- AC/DC live values (per-device for MIS-accurate observability) ---
+    pub ac_power_watts: Family<DeviceLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub ac_voltage_l1: Family<DeviceLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub ac_current_l1: Family<DeviceLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub grid_frequency_hz: Family<DeviceLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub dc_power_s1_watts: Family<DeviceLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub dc_power_s2_watts: Family<DeviceLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub inverter_temperature_c: Family<DeviceLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    // --- Energy counters (per-device, monotonically increasing) ---
+    pub energy_today_wh: Family<DeviceLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
+    pub energy_lifetime_wh: Family<DeviceLabels, Gauge<f64, std::sync::atomic::AtomicU64>>,
 }
 
 impl MetricsRegistry {
@@ -85,7 +110,7 @@ impl MetricsRegistry {
         );
 
         let new_float_gauge =
-            || Family::<InverterLabels, Gauge<f64, std::sync::atomic::AtomicU64>>::default();
+            || Family::<DeviceLabels, Gauge<f64, std::sync::atomic::AtomicU64>>::default();
 
         let ac_power_watts = new_float_gauge();
         registry.register(
@@ -189,11 +214,45 @@ mod tests {
                 slot: "zolder".into(),
             })
             .inc();
+        m.ac_power_watts
+            .get_or_create(&DeviceLabels::same("zolder"))
+            .set(123.45);
         let text = m.encode().await;
         assert!(text.contains("sma_polls_total"));
         assert!(text.contains("sma_poll_errors_total"));
         assert!(text.contains("sma_bt_reconnects_total"));
         assert!(text.contains("sma_ac_power_watts"));
         assert!(text.contains(r#"slot="zolder""#));
+    }
+
+    /// MIS mode: one RFCOMM session labelled `slot=repeater`, two
+    /// devices labelled `device=zolder` / `device=garage`. Per-device
+    /// metrics should carry BOTH labels; session-level metrics only
+    /// carry `slot`.
+    #[tokio::test]
+    async fn mis_labels_are_per_device() {
+        let m = MetricsRegistry::new();
+        m.polls_total
+            .get_or_create(&InverterLabels {
+                slot: "repeater".into(),
+            })
+            .inc();
+        m.ac_power_watts
+            .get_or_create(&DeviceLabels {
+                slot: "repeater".into(),
+                device: "zolder".into(),
+            })
+            .set(1500.0);
+        m.ac_power_watts
+            .get_or_create(&DeviceLabels {
+                slot: "repeater".into(),
+                device: "garage".into(),
+            })
+            .set(1800.0);
+        let text = m.encode().await;
+        assert!(text.contains(r#"slot="repeater",device="zolder""#));
+        assert!(text.contains(r#"slot="repeater",device="garage""#));
+        assert!(text.contains("1500"));
+        assert!(text.contains("1800"));
     }
 }

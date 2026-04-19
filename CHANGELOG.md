@@ -3,6 +3,36 @@
 All notable changes to hass-sma-rs are tracked here. This project follows
 semantic-ish versioning; pre-1.0 is rapid iteration.
 
+## 0.1.47 — 2026-04-19 (probe subcommand + per-device Prometheus)
+
+### Added
+- **`hass-sma-daemon probe` subcommand** — one-shot piconet enumeration.
+  Connects to a BT MAC, runs the full SMA handshake, prints the
+  topology log + every logon reply, then exits with a ready-to-paste
+  `inverters: devices:` YAML snippet. No polling, no MQTT, no /data
+  writes. Solves the painful "which serials are behind this repeater?"
+  discovery problem without the restart-churn that stranded sessions
+  on 2026-04-19.
+
+  Usage:
+  ```
+  hass-sma-daemon probe --mac 00:80:25:AA:BB:CC --password 0000
+  ```
+
+- **Per-device Prometheus labels** — MIS multi-device metrics now carry
+  both `slot` (RFCOMM session slot) AND `device` (the actual
+  inverter). Session-level counters (bt_reconnects_total,
+  handshake_errors_total, etc.) keep single-label `slot`. Legacy
+  single-device installs unchanged: `slot == device` in that mode so
+  old Grafana queries still work.
+
+### Documented
+- `DeviceCfg.password` field is explicitly documented as UNUSED —
+  SMA's broadcast logon uses one password for all devices on the
+  piconet, so per-device password only matters if we adopt a
+  per-device re-logon model (not planned). Field kept for schema
+  stability + future optionality.
+
 ## 0.1.46 — 2026-04-19 (MIS multi-inverter polling)
 
 ### Added

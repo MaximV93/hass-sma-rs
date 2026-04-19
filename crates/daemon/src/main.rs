@@ -4,7 +4,7 @@ mod config;
 
 use anyhow::{Context, Result};
 use bluez_transport::{rfcomm::parse_bt_mac, RfcommTransport};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use config::{DaemonConfig, InverterCfg};
 use inverter_client::session::{Session, SessionConfig};
 use inverter_client::values::{
@@ -28,9 +28,42 @@ use tracing::{error, info, warn};
 #[derive(Parser, Debug)]
 #[command(version, about = "SMA Sunny Boy BT daemon (Rust rewrite)")]
 struct Cli {
-    /// Path to config YAML.
-    #[arg(short, long, default_value = "/data/options.yaml")]
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    /// Path to config YAML. Default is the HA addon options path.
+    /// Used by the (default) daemon mode.
+    #[arg(short, long, default_value = "/data/options.yaml", global = true)]
     config: PathBuf,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// One-shot piconet enumeration — connect to a BT MAC, run the
+    /// full SMA handshake, dump every device seen in the topology
+    /// broadcast AND every device that replies to logon, then exit.
+    ///
+    /// Useful for discovering the devices behind a repeater before
+    /// writing out `inverters: - devices:` config. Does NOT start the
+    /// poll loop, does NOT publish MQTT, does NOT touch /data.
+    Probe {
+        /// BT MAC of the entry point (the BT radio or repeater).
+        #[arg(long)]
+        mac: String,
+
+        /// Password for the broadcast logon. Default SMA is 0000.
+        #[arg(long, default_value = "0000")]
+        password: String,
+
+        /// Local HCI BT address (LE, 6 bytes). Kernel picks
+        /// automatically if omitted.
+        #[arg(long)]
+        local: Option<String>,
+
+        /// RFCOMM recv timeout in ms per frame.
+        #[arg(long, default_value = "15000")]
+        timeout_ms: u64,
+    },
 }
 
 /// Optional long-term archive sink. Wrapped so call sites don't need
@@ -72,7 +105,7 @@ async fn publish_query_result(
     publisher: &DiscoveryPublisher,
     identity: &InverterIdentity,
     metrics: &MetricsRegistry,
-    lbl: &InverterLabels,
+    lbl: &telemetry::metrics::DeviceLabels,
     archiver: &Archiver,
 ) {
     match kind {
@@ -585,11 +618,20 @@ async fn run_inverter(
             let mut session_error: Option<String> = None;
 
             'targets: for (id, susy, serial) in targets.iter() {
+                // Per-device label carries BOTH the session slot (== BT
+                // entry point, e.g. "repeater") and the actual inverter
+                // slot (e.g. "zolder"). In legacy single-device mode both
+                // are the same name and Grafana queries using either
+                // label still work.
+                let dlbl = telemetry::metrics::DeviceLabels {
+                    slot: inv_cfg.slot.clone(),
+                    device: id.slot.clone(),
+                };
                 for kind in per_tick_queries.iter() {
                     match session.query_for_device(*susy, *serial, *kind).await {
                         Ok(body) => {
                             publish_query_result(
-                                *kind, &body, &publisher, id, &metrics, &lbl, &archiver,
+                                *kind, &body, &publisher, id, &metrics, &dlbl, &archiver,
                             )
                             .await
                         }
@@ -637,11 +679,92 @@ async fn run_inverter(
     }
 }
 
+/// One-shot probe: handshake the BT target, log topology, collect all
+/// logon replies, print a ready-to-paste `inverters:` YAML snippet to
+/// stdout. Exits after one cycle — no polling, no MQTT, no /data writes.
+async fn run_probe(
+    mac: String,
+    password: String,
+    local: Option<String>,
+    timeout_ms: u64,
+) -> Result<()> {
+    let inverter_bt = parse_bt_mac(&mac).with_context(|| format!("invalid BT MAC: {mac}"))?;
+    let local_bt = local.as_deref().and_then(parse_bt_mac).unwrap_or([0u8; 6]);
+
+    info!(mac = %mac, "probe: connecting");
+    let transport = RfcommTransport::connect(inverter_bt, Some(local_bt))
+        .await
+        .with_context(|| format!("RFCOMM connect to {mac}"))?;
+
+    let session_cfg = SessionConfig {
+        inverter_bt,
+        local_bt,
+        password,
+        user_group: UserGroup::User,
+        timeout_ms,
+        mis_enabled: true,
+    };
+    // Use a throwaway app_serial for the probe — this session is
+    // intentionally short-lived and we clean-close at the end.
+    let mut session = Session::new(transport, session_cfg);
+    session
+        .handshake_and_logon()
+        .await
+        .context("handshake + logon")?;
+
+    info!(
+        susy = session.inverter_susy_id,
+        serial = session.inverter_serial,
+        "probe: logged in"
+    );
+
+    // Handshake + logon already log the piconet topology + every
+    // logon reply (INFO level) via the Session internals. We just
+    // graceful-close and emit a helper snippet so the user can paste
+    // directly into their YAML.
+    //
+    // NOTE: the probe only sees devices that ACCEPTED the broadcast
+    // logon. Devices that 0x0001-rejected (session conflict) still
+    // appear in the topology log above. Recommend the user look at
+    // both sections of the log output.
+    println!();
+    println!("# Probe complete. Devices seen in logon replies are logged");
+    println!("# above at INFO level. Paste into addon YAML as:");
+    println!("inverters:");
+    println!("  - slot: repeater");
+    println!("    bt_address: \"{mac}\"");
+    println!("    password: \"<paste>\"");
+    println!("    devices:");
+    println!("      - slot: <your-name>");
+    println!("        app_serial: {}", session.inverter_serial);
+    println!("        model: \"<SB-xxxx-xx>\"");
+    println!("      # ... repeat per device reported above.");
+    println!();
+
+    let _ = session.graceful_close().await;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing(false);
 
     let cli = Cli::parse();
+
+    // Subcommand dispatch. Default (None) runs the long-lived daemon.
+    if let Some(cmd) = cli.command {
+        match cmd {
+            Command::Probe {
+                mac,
+                password,
+                local,
+                timeout_ms,
+            } => {
+                return run_probe(mac, password, local, timeout_ms).await;
+            }
+        }
+    }
+
     let yaml = std::fs::read_to_string(&cli.config)
         .with_context(|| format!("read config at {}", cli.config.display()))?;
     let cfg: DaemonConfig = DaemonConfig::from_yaml(&yaml)?;

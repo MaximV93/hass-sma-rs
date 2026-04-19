@@ -119,8 +119,11 @@ pub struct DeviceCfg {
     pub slot: String,
     /// The device's internal SMA serial (seen in logon replies).
     pub app_serial: u32,
-    /// Optional per-device password override; defaults to the parent
-    /// `InverterCfg.password`.
+    /// Optional per-device password override. Currently UNUSED —
+    /// hass-sma-rs uses one broadcast logon whose password reaches all
+    /// devices on the piconet; per-device unlock isn't in the SMA
+    /// protocol's design. Field is kept for schema stability + future
+    /// enhancement (e.g. per-device re-logon loops).
     #[serde(default)]
     pub password: Option<String>,
     /// Optional type hint — same semantics as `InverterCfg.model`.
