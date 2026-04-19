@@ -231,13 +231,16 @@ pub fn parse_grid_frequency(body: &[u8]) -> Option<f32> {
 /// Parse a CosPhi (power factor) reply. Returns the scalar as f32
 /// (1.000 = perfect real power, lower = more reactive).
 ///
-/// LRI 0x00474800 range. SMA reports the signed scaled value so a
-/// capacitive (leading) power factor would come through negative;
-/// we expose the absolute magnitude per HA convention.
+/// Accepts either the legacy LRI range 0x00237400..0x002374FF (HF-30
+/// era) or the newer 0x00474800..0x004748FF. SMA reports the signed
+/// scaled value so a capacitive (leading) power factor comes through
+/// negative; we expose the absolute magnitude per HA convention.
 pub fn parse_cosphi(body: &[u8]) -> Option<f32> {
     let mut out: Option<f32> = None;
     for_each_28_record(body, |lri, _dt, rec| {
-        if (0x0047_4800..=0x0047_48FF).contains(&lri) && out.is_none() {
+        let in_legacy = (0x0023_7400..=0x0023_74FF).contains(&lri);
+        let in_modern = (0x0047_4800..=0x0047_48FF).contains(&lri);
+        if (in_legacy || in_modern) && out.is_none() {
             // Scaled by 1000 per SBFspot convention.
             out = i32_value_28(rec).map(|v| v.unsigned_abs() as f32 / 1000.0);
         }

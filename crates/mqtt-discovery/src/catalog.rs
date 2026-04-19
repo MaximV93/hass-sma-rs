@@ -349,15 +349,8 @@ pub fn sensor_catalog() -> &'static [SensorConfig] {
             icon: "mdi:tag",
             diagnostic: true,
         },
-        SensorConfig {
-            name: "Active Power Limit",
-            key: "active_power_limit_w",
-            device_class: Some("power"),
-            state_class: Some("measurement"),
-            unit: Some("W"),
-            icon: "mdi:gauge",
-            diagnostic: false,
-        },
+        // `active_power_limit_w` sensor removed 0.1.51 — HF-30 firmware
+        // doesn't expose the LRI. Re-add for newer inverters.
     ]
 }
 

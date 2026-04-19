@@ -43,8 +43,12 @@ pub enum QueryKind {
     BatteryInfo,
     /// Grid export total. LRI METERING_GRID_MS_TOT_W.
     MeteringGridTotalW,
-    /// Power factor (cos φ) per phase. LRI SPOT_COSPHI range.
-    /// Value at the 28-byte record offset is a signed i32 scaled by 1000.
+    /// Power factor (cos φ) per phase.
+    ///
+    /// HF-30 firmware (02.30.06.R observed) returns retcode 0x15
+    /// "LRI not available" for the modern range 0x00474800; the
+    /// legacy range 0x00237400..0x004748FF covers older firmwares and
+    /// is what SBFspot uses. Try BOTH — parser accepts either LRI id.
     SpotCosPhi,
     /// Configured feed-in power cap. Single value in watts, set at
     /// commissioning. Useful for detecting curtailment (e.g. Belgian
@@ -52,10 +56,6 @@ pub enum QueryKind {
     MaxFeedInPower,
     /// Nameplate AC power ceiling. E.g. 3000 for SB 3000HF-30.
     NominalAcPower,
-    /// Live active-power limit — where derating is clipping right
-    /// now. Equals NominalAcPower when healthy, lower when the
-    /// inverter is reducing output (temperature, grid voltage, etc).
-    ActivePowerLimit,
 }
 
 impl QueryKind {
@@ -82,10 +82,13 @@ impl QueryKind {
             // LRI refs from SBFspot Types.h. Each clamped to a narrow
             // range (first..last) so the inverter only returns the
             // specific record we care about.
-            SpotCosPhi => (0x5100_0200, 0x0047_4800, 0x0047_48FF),
+            //
+            // Widened CosPhi range covers both the older LRI
+            // 0x00237400 (HF-30 era) and the newer 0x00474800 used
+            // by STP / current models. The parser accepts either.
+            SpotCosPhi => (0x5100_0200, 0x0023_7400, 0x0047_48FF),
             MaxFeedInPower => (0x5100_0200, 0x0041_1F00, 0x0041_1F19),
             NominalAcPower => (0x5100_0200, 0x0041_1E00, 0x0041_1E19),
-            ActivePowerLimit => (0x5100_0200, 0x0041_6500, 0x0041_6519),
         }
     }
 }

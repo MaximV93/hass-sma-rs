@@ -727,14 +727,10 @@ async fn run_inverter(
                     let _ = publisher.publish_value(id, "max_feedin_w", w).await;
                 }
             }
-            if let Ok(body) = session
-                .query_for_device(*susy, *serial, QueryKind::ActivePowerLimit)
-                .await
-            {
-                if let Some(w) = parse_single_watts_record(&body, 0x0041_6500, 0x0041_6519) {
-                    let _ = publisher.publish_value(id, "active_power_limit_w", w).await;
-                }
-            }
+            // ActivePowerLimit was dropped in 0.1.51 — SB HF-30 firmware
+            // doesn't expose LRI 0x00416500 (retcode 0x15 "not available").
+            // If you have a newer inverter that supports it, add the
+            // QueryKind variant back + a matching catalog entry.
         }
 
         let session_start = chrono::Utc::now();
