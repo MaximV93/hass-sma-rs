@@ -253,11 +253,28 @@ pub fn parse_cosphi(body: &[u8]) -> Option<f32> {
 /// `lri_range` is the `(first, last)` pair matching the query's
 /// opcode tuple — used to discriminate against other records the
 /// inverter may include in a shared reply.
+///
+/// For static nameplate values the inverter populates the
+/// min/max/current slots inconsistently — NominalAcPower fills all
+/// slots with the same value, while MaxFeedInPower leaves the
+/// "current" slot (offset 16..20) as zero and reports the limit in
+/// the min/max slots only. Scan all 5 possible value positions
+/// (8..12, 12..16, 16..20, 20..24, 24..28) and return the first
+/// non-zero u32 we find.
 pub fn parse_single_watts_record(body: &[u8], lri_first: u32, lri_last: u32) -> Option<u32> {
     let mut out: Option<u32> = None;
     for_each_28_record(body, |lri, _dt, rec| {
         if lri >= lri_first && lri <= lri_last && out.is_none() {
-            out = u32_value_28(rec);
+            for off in [16usize, 8, 12, 20, 24] {
+                if off + 4 > rec.len() {
+                    continue;
+                }
+                let v = LittleEndian::read_u32(&rec[off..off + 4]);
+                if v != 0 && v != 0x8000_0000 && v != 0xFFFF_FFFF {
+                    out = Some(v);
+                    break;
+                }
+            }
         }
     });
     out
@@ -899,6 +916,26 @@ mod tests {
 
         let out = parse_single_watts_record(&body, 0x0041_1E00, 0x0041_1E19);
         assert_eq!(out, Some(3000));
+    }
+
+    /// Regression: real MaxFeedInPower capture from live SB 3000HF-30.
+    /// The "current" slot (offset 16..20) is 0, value is reported in
+    /// the min slot (offset 8..12). Parser must fall through to find
+    /// the first non-zero value.
+    #[test]
+    fn parse_single_watts_reads_min_slot_when_current_is_zero() {
+        let mut rec = [0u8; 28];
+        LittleEndian::write_u32(&mut rec[0..4], 0x00_41_1F_01);
+        // min slot populated, current slot zero
+        rec[8..12].copy_from_slice(&3000u32.to_le_bytes());
+        rec[12..16].copy_from_slice(&3000u32.to_le_bytes());
+        // rec[16..20] stays 0 (the "current" slot)
+        rec[20..24].copy_from_slice(&3000u32.to_le_bytes());
+        let body = with_prefix(&rec);
+        assert_eq!(
+            parse_single_watts_record(&body, 0x0041_1F00, 0x0041_1F19),
+            Some(3000)
+        );
     }
 
     #[test]
