@@ -1,101 +1,129 @@
-# Discovering additional inverters
+# Discovering additional inverters on your SMA piconet
 
-How to find the BT MAC and user password for each SMA inverter on your
-network so you can add them as a second/third `inverters:` entry in
-hass-sma-rs config.
+> **Updated 2026-04-19**: the previous version of this document assumed
+> a "2 BT direct inverters" topology. For MIS networks (repeater +
+> multiple inverters behind it) that shape is WRONG — see below.
 
-## 1. Let hass-sma-rs log the piconet for you
+## Two network shapes
 
-Since version 0.1.38 the daemon logs every BT device it sees on the
-inverter's piconet during handshake. Look for lines like:
+### Shape A: two direct BT inverters
+
+```
+hci0 → inverter1 (BT MAC A)
+     → inverter2 (BT MAC B)
+```
+
+Simplest case. Add a second `inverters:` entry in the addon YAML with the
+second inverter's own BT MAC. Each gets its own tokio task + RFCOMM session.
+
+### Shape B: MIS network (BT repeater + N inverters)
+
+```
+hci0 → BT Repeater (one MAC, e.g. 00:80:25:21:32:35)
+         ├── inverter1   (susy_id X, serial Y1)
+         ├── inverter2   (susy_id X, serial Y2)
+         └── inverter3   (susy_id X, serial Y3)
+```
+
+This is SMA's default on any multi-inverter installation. The repeater
+advertises on BT; the inverters are reached via the repeater using
+app_serial addressing in the L2 header of each request.
+
+**hass-sma-rs does NOT yet support Shape B multi-inverter polling.**
+Currently only the first inverter identified by the init-reply is
+queried. Multi-device MIS support is on the roadmap; the protocol is
+already per-request-addressed so it's implementable without a
+handshake redesign.
+
+Tracking: [#TBD](https://github.com/MaximV93/hass-sma-rs/issues)
+
+## Recognising which shape you have
+
+### 1. Read the topology log
+
+Since version 0.1.38 the daemon logs every BT device in the piconet
+during handshake. Look for:
 
 ```
 INFO: BT piconet topology peers=[
-  "00:80:25:21:87:CA (inverter)",
-  "00:80:25:1E:11:27 (inverter)",
   "00:80:25:21:32:35 (inverter)",
   "04:42:1A:5A:37:74 (host/local)"
 ]
 ```
 
-`00:80:25:*` is SMA's Organizationally Unique Identifier — any BT MAC
-starting with those three bytes is an SMA device. The "host/local" entry
-is your Home Assistant / Raspberry Pi BT dongle itself.
+- **One `(inverter)` entry** → either shape A single-inverter, or
+  shape B with the repeater counted as a single BT device. Check the
+  device's identification (via SBFspot's `SBFspotUploadDaemon` or by
+  connecting with Sunny Explorer) — if `DeviceClass = "Communication
+  products"` and `DeviceType = "Bluetooth Repeater"`, you're in
+  shape B.
+- **Multiple `(inverter)` entries** → shape A, multi-direct-BT.
 
-Each `(inverter)` entry is a candidate for a new `inverters:` entry in
-your config. Subtract the one you already have configured, and you're
-left with candidates.
+### 2. Check SBFspot's legacy logs if you had that addon
 
-## 2. Map BT MAC → physical inverter
+If haos-sbfspot ran previously, its logs reveal the real topology.
+Look for:
 
-SMA prints the Bluetooth MAC on the inverter's nameplate sticker (the
-small label usually beside the serial number and part of the 2-D
-barcode). Easiest way:
+```
+sudo grep -E 'Device Type|Connecting to' /share/sbfspot-logs/*.log
+```
 
-- Climb to the inverter physically
-- Read the `Bluetooth` field on the sticker
-- That's the MAC to use
+Multiple `InvType` values behind one `Connecting to <MAC>` = shape B.
 
-If the sticker isn't accessible, the inverter's own LCD knows:
+## Configuring a second inverter
 
-- Press any button to wake the LCD
-- Navigate: `System` → `Communication` → `Bluetooth Info`
-- Note the MAC
-
-## 3. Get the user password
-
-SMA inverters default to `0000` for the User group. If someone has
-changed it (the installer or a previous owner), you'll need to either
-recover it via the inverter keypad reset procedure, or use the same
-password you use for haos-sbfspot / Sunny Explorer (it's always the
-same across all SMA interfaces on a given inverter).
-
-## 4. Update the addon config
-
-HA → Settings → Add-ons → hass-sma-rs → Configuration → edit YAML:
+### Shape A (only)
 
 ```yaml
 inverters:
   - slot: zolder
-    bt_address: "00:80:25:21:32:35"
+    bt_address: "00:80:25:AA:BB:CC"
     password: "<secret>"
     model: "SB 3000HF-30"
-  - slot: zonneveld                        # NEW
-    bt_address: "00:80:25:21:87:CA"        # NEW — from the topology log
-    password: "<secret>"                   # NEW — same or different
-    model: "SB 3000HF-30"                  # NEW — or whatever
-    poll_interval: 60s
-    mis_enabled: false
+  - slot: garage
+    bt_address: "00:80:25:DD:EE:FF"       # DIFFERENT MAC — must be direct-BT
+    password: "<secret>"
+    model: "SB 2000HF-30"
 ```
 
-Restart the addon. Each inverter gets its own tokio task with
-independent backoff, so if one goes to sleep at night the other keeps
-running. Prometheus metrics and MQTT discovery sensors get a new set
-automatically.
+If the two entries' `bt_address` happen to collide (same MAC), the
+second task will EBUSY on RFCOMM and log-retry indefinitely. That's
+the signal you're actually in shape B.
 
-## 5. Verify
+### Shape B (future)
 
-Logs should show one handshake + logon pair per inverter:
+Single `inverters:` entry for the BT repeater MAC plus a `devices:`
+sub-list with app_serial + password per device. Not wired yet — when
+implemented, config will look like:
 
+```yaml
+inverters:
+  - slot: repeater
+    bt_address: "00:80:25:21:32:35"
+    devices:
+      - slot: zolder
+        app_serial: 2120121246
+        password: "<secret>"
+        model: "SB 3000HF-30"
+      - slot: garage
+        app_serial: 2120121383
+        password: "<secret>"
+        model: "SB 2000HF-30"
 ```
-INFO inverter=zolder slot=zolder susy_id=131 serial=2120121246 — logged in
-INFO inverter=zonneveld slot=zonneveld susy_id=131 serial=2120121383 — logged in
-```
 
-HA will create a second device card with 28 fresh sensors under the
-new `sbfspot_zonneveld_*` namespace.
+Each device gets its own HA sensors + MQTT topic space; all share the
+single RFCOMM socket.
 
 ## Troubleshooting
 
-- **`Host is down` on the new inverter's MAC** — night-time sleep.
-  Wait for sunrise and retry.
-- **`Resource busy`** — another addon or Sunny Explorer is holding the
-  hci0 connection. Shut that process down first.
+- **`Host is down` on a supposedly-direct second inverter** — likely
+  you're in shape B and the second MAC doesn't actually exist. Double
+  check via the topology log.
+- **`Resource busy (EBUSY)`** — another addon or Sunny Explorer holds
+  the hci0 connection. Shut that process down first.
 - **Handshake succeeds but logon retcode=0x0100** — wrong password for
-  that inverter. SB inverters have per-device passwords; copy the
-  value from Sunny Explorer / inverter LCD settings.
-- **Handshake succeeds but queries return retcode=0xFFFF** — BT mesh
-  confusion; the response is coming from a relay device not the target
-  inverter. Check that the `bt_address` you configured actually matches
-  what's on the nameplate; MIS networks have repeaters that also show
-  up in the topology log.
+  that serial. SMA inverters have per-device passwords; copy the
+  value from Sunny Explorer or the inverter's LCD settings.
+- **Handshake succeeds but queries return retcode=0xFFFF** — addressed
+  a device that doesn't exist or is asleep. In shape B, the repeater
+  replies retcode=0xFFFF for unknown app_serial.
