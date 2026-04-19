@@ -180,6 +180,29 @@ impl L2Header {
         }
     }
 
+    /// Event-log query header. `ctrl=0xE0` (not 0xA0 like spot queries),
+    /// `ctrl2=0x0100`. Body is `0x7010_0200 | start_unix | end_unix`
+    /// (12 bytes). Replies are multi-packet — caller must collect until
+    /// a frame with `ctrl2` low bit clear arrives (fragment_id == 0).
+    pub fn event_log_query(
+        pkt_id: u16,
+        app_serial: u32,
+        dst_susy_id: u16,
+        dst_serial: u32,
+    ) -> Self {
+        Self {
+            longwords: 0x09,
+            ctrl: 0xE0,
+            dst_susy_id,
+            dst_serial,
+            ctrl2: 0x0100,
+            app_susy_id: APP_SUSY_ID,
+            app_serial,
+            error_code: 0,
+            pkt_id,
+        }
+    }
+
     /// Logoff L2 packet (SBFspot sends this RIGHT BEFORE logon — presumably
     /// to reset any lingering session state). Command body is
     /// `0xFFFD010E | 0xFFFFFFFF` (8 bytes).

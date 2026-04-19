@@ -557,6 +557,125 @@ pub fn parse_software_version(body: &[u8]) -> Option<String> {
     out
 }
 
+/// A single event-log entry as parsed from the inverter's 24-byte
+/// event record. Fields follow SBFspot's `GetInverterEventData` layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventRecord {
+    /// Monotonic entry id (u32 sequence).
+    pub entry_id: u32,
+    /// Unix timestamp (seconds).
+    pub timestamp: u32,
+    /// Raw event code. Tag id lives in the low 16 bits.
+    pub event_code: u32,
+    /// Reporting device's susy_id (high 16) + serial (packed).
+    pub device_id: u32,
+    /// Optional param slots (meaning depends on tag).
+    pub param1: u32,
+    pub param2: u32,
+}
+
+impl EventRecord {
+    /// The tag id (low 16 bits of the event code) — key for
+    /// `event_tag_text` lookup.
+    pub fn tag(&self) -> u16 {
+        (self.event_code & 0xFFFF) as u16
+    }
+
+    /// Human-readable event-code text, if known.
+    pub fn text(&self) -> Option<&'static str> {
+        event_tag_text(self.tag())
+    }
+}
+
+/// Parse a single-fragment event-log reply body into records. The
+/// inverter may split the reply across multiple frames; the caller is
+/// responsible for concatenating record regions AND for stopping at
+/// the first frame whose L2 header indicates `fragment_id == 0`
+/// (last fragment).
+///
+/// Each record is 24 bytes, starting after the standard 12-byte
+/// opcode-echo prefix.
+pub fn parse_event_log_records(body: &[u8]) -> Vec<EventRecord> {
+    if body.len() < 12 {
+        return Vec::new();
+    }
+    let payload = &body[12..];
+    let mut out = Vec::with_capacity(payload.len() / 24);
+    let mut off = 0usize;
+    while off + 24 <= payload.len() {
+        let rec = &payload[off..off + 24];
+        let entry_id = byteorder::LittleEndian::read_u32(&rec[0..4]);
+        let timestamp = byteorder::LittleEndian::read_u32(&rec[4..8]);
+        let event_code = byteorder::LittleEndian::read_u32(&rec[8..12]);
+        let device_id = byteorder::LittleEndian::read_u32(&rec[12..16]);
+        let param1 = byteorder::LittleEndian::read_u32(&rec[16..20]);
+        let param2 = byteorder::LittleEndian::read_u32(&rec[20..24]);
+        // Guard: zero-filled trailing rec = padding, skip.
+        if entry_id == 0 && event_code == 0 && timestamp == 0 {
+            break;
+        }
+        out.push(EventRecord {
+            entry_id,
+            timestamp,
+            event_code,
+            device_id,
+            param1,
+            param2,
+        });
+        off += 24;
+    }
+    out
+}
+
+/// Lookup for common SMA event tag ids → human text. Sparse starter
+/// set from SBFspot's `TagListEN-US.txt`. Not exhaustive; unknown
+/// tags return `None` and the caller should render `TagID <n>`.
+pub fn event_tag_text(tag: u16) -> Option<&'static str> {
+    Some(match tag {
+        // Operation
+        295 => "SMA Grid Guard code entered",
+        301 => "Waiting for grid voltage",
+        302 => "Waiting for grid frequency",
+        303 => "Off",
+        304 => "Starting",
+        305 => "MPP search",
+        306 => "Feeding",
+        307 => "Normal operation",
+        308 => "Standby",
+        309 => "Stop",
+        311 => "System OK",
+        // Grid faults
+        326 => "Grid voltage too low",
+        327 => "Grid voltage too high",
+        328 => "Grid frequency too low",
+        329 => "Grid frequency too high",
+        330 => "Grid voltage window error",
+        331 => "Grid frequency window error",
+        332 => "10-min average grid voltage exceeded",
+        // Fault conditions
+        401 => "Insulation resistance fault",
+        402 => "Residual current fault",
+        403 => "DC voltage too high — grid feed interrupted",
+        404 => "DC voltage too low",
+        405 => "Temperature inside device too high",
+        406 => "Self-test failure",
+        407 => "Derating due to temperature",
+        408 => "Derating due to excessive grid voltage",
+        // System / communication
+        501 => "Communication error with grid",
+        601 => "System start",
+        602 => "System stop",
+        603 => "Firmware update initiated",
+        604 => "Firmware update successful",
+        605 => "Firmware update failed",
+        // User actions
+        701 => "User logoff",
+        702 => "User login successful",
+        703 => "Invalid password",
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,6 +796,46 @@ mod tests {
         LittleEndian::write_u32(&mut rec[16..20], 0x00_FF_FF_FE); // end marker
         let body = with_prefix(&rec);
         assert_eq!(parse_type_label_raw(&body), Some(9072));
+    }
+
+    #[test]
+    fn parse_event_log_yields_records() {
+        // Build a fake event-log reply body: 12-byte opcode prefix +
+        // 2× 24-byte record + 1 zero-filled trailing padding record.
+        let mut body = vec![0u8; 12 + 24 * 3];
+        // record 1: entry_id=42, ts=1700000000, event_code=0x0000_0131 (tag 305 "MPP search"),
+        //           device_id=0x0080_1234, params ignored.
+        let off = 12;
+        LittleEndian::write_u32(&mut body[off..off + 4], 42);
+        LittleEndian::write_u32(&mut body[off + 4..off + 8], 1_700_000_000);
+        LittleEndian::write_u32(&mut body[off + 8..off + 12], 0x0000_0131);
+        LittleEndian::write_u32(&mut body[off + 12..off + 16], 0x0080_1234);
+        // record 2: entry_id=43, tag 307 "Normal operation"
+        let off = 12 + 24;
+        LittleEndian::write_u32(&mut body[off..off + 4], 43);
+        LittleEndian::write_u32(&mut body[off + 4..off + 8], 1_700_000_060);
+        LittleEndian::write_u32(&mut body[off + 8..off + 12], 0x0000_0133);
+        // record 3 left zero = padding (parser must stop)
+        let recs = parse_event_log_records(&body);
+        assert_eq!(recs.len(), 2);
+        assert_eq!(recs[0].entry_id, 42);
+        assert_eq!(recs[0].tag(), 305);
+        assert_eq!(recs[0].text(), Some("MPP search"));
+        assert_eq!(recs[1].tag(), 307);
+        assert_eq!(recs[1].text(), Some("Normal operation"));
+    }
+
+    #[test]
+    fn event_tag_text_sparse_lookup() {
+        assert_eq!(event_tag_text(307), Some("Normal operation"));
+        assert_eq!(event_tag_text(401), Some("Insulation resistance fault"));
+        assert_eq!(event_tag_text(65535), None);
+    }
+
+    #[test]
+    fn parse_event_log_handles_empty_body() {
+        assert!(parse_event_log_records(&[]).is_empty());
+        assert!(parse_event_log_records(&[0u8; 8]).is_empty());
     }
 
     /// Regression: the real reply body observed live (nighttime — all values

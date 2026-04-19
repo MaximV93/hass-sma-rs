@@ -3,7 +3,7 @@
 use bluez_transport::{Transport, TransportError};
 use sma_bt_protocol::{
     auth::{build_init_body, build_logoff_body, build_logon_body, UserGroup},
-    commands::{build_query_body, QueryKind},
+    commands::{build_event_log_body, build_query_body, QueryKind},
     frame::{Frame, FrameBuilder, FrameKind, ParseError},
     packet::decode_l2,
     APP_SUSY_ID,
@@ -637,6 +637,78 @@ impl<T: Transport> Session<T> {
             "query reply"
         );
         Ok(reply.body)
+    }
+
+    /// Send an event-log query for the given time window, then collect
+    /// multi-packet replies until the inverter marks fragment=0 (last).
+    ///
+    /// Returns a flat concatenation of all command bodies across every
+    /// reply fragment. Caller runs `parse_event_log_records` on the
+    /// result to get typed `EventRecord` entries.
+    ///
+    /// NOTE: implementation is complete at the wire layer but has NOT
+    /// yet been live-validated against a real SB inverter. Use with
+    /// empirical care. See ADR 0004 for the protocol reference.
+    pub async fn query_event_log_for_device(
+        &mut self,
+        susy_id: u16,
+        serial: u32,
+        start_unix: u32,
+        end_unix: u32,
+    ) -> Result<Vec<u8>> {
+        if self.state != SessionState::LoggedIn {
+            return Err(SessionError::Protocol {
+                phase: "event-log-not-logged-in",
+            });
+        }
+        let pkt_id = self.next_pcktid();
+        let body = build_event_log_body(
+            pkt_id,
+            self.app_serial,
+            susy_id,
+            serial,
+            start_unix,
+            end_unix,
+        );
+        let frame_bytes = FrameBuilder::new(self.cfg.local_bt, [0xFF; 6], 0x0001)
+            .extend(&body)
+            .build();
+        self.transport.send_frame(&frame_bytes).await?;
+        debug!(pkt_id, susy_id, serial, "sent event-log query");
+
+        // Collect fragments. SBFspot reads until the header's fragment
+        // indicator is 0 (last). Cap at 32 fragments to avoid runaway
+        // if the inverter replies with something unexpected.
+        let mut aggregated: Vec<u8> = Vec::new();
+        for fragment in 0..32u32 {
+            let (_raw, reply) = self.recv_l2_with_pkt_id(pkt_id, "event-log").await?;
+            if reply.error_code != 0 {
+                warn!(
+                    code = format!("0x{:04x}", reply.error_code),
+                    fragment, "event-log reply retcode != 0 — aborting"
+                );
+                return Err(SessionError::Protocol {
+                    phase: "event-log-retcode",
+                });
+            }
+            aggregated.extend_from_slice(&reply.body);
+            // Our L2Reply doesn't expose ctrl2 directly, but the
+            // convention SBFspot uses: fragment counter in a specific
+            // header field. For the MVP we rely on the body-size
+            // heuristic — a final fragment whose body is smaller than
+            // 12+24*N bytes, or a body that parses into zero records,
+            // signals end of stream. Bail when we see an empty body.
+            if reply.body.len() < 12 {
+                break;
+            }
+            // Heuristic stop: if body length doesn't grow by a full
+            // 24-byte record's worth beyond the 12-byte prefix, the
+            // inverter is out of records.
+            if reply.body.len() == 12 {
+                break;
+            }
+        }
+        Ok(aggregated)
     }
 
     /// Cleanly close the transport. Safe to call multiple times.

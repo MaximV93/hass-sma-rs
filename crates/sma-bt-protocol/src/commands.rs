@@ -88,6 +88,30 @@ pub fn build_query_body(
     encode_l2(&hdr, &body)
 }
 
+/// Build the L2 body for an event-log query. Different wire shape
+/// from spot queries: command opcode `0x7010_0200` (user-group), then
+/// two u32 unix timestamps defining the time window.
+///
+/// - `start_unix` / `end_unix` — inclusive time window (seconds since
+///   1970-01-01 UTC). Pass `(now - 86400, now)` to get the last day.
+/// - Reply is multi-packet, 24-byte event records each. Use
+///   `parse_event_log_records` on each fragment's command-body.
+pub fn build_event_log_body(
+    pkt_id: u16,
+    app_serial: u32,
+    dst_susy_id: u16,
+    dst_serial: u32,
+    start_unix: u32,
+    end_unix: u32,
+) -> Vec<u8> {
+    let mut body = [0u8; 12];
+    LittleEndian::write_u32(&mut body[0..4], 0x7010_0200);
+    LittleEndian::write_u32(&mut body[4..8], start_unix);
+    LittleEndian::write_u32(&mut body[8..12], end_unix);
+    let hdr = L2Header::event_log_query(pkt_id, app_serial, dst_susy_id, dst_serial);
+    encode_l2(&hdr, &body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +139,20 @@ mod tests {
         assert_eq!(&cmd_slice[0..4], &0x5100_0200u32.to_le_bytes());
         assert_eq!(&cmd_slice[4..8], &0x0026_3F00u32.to_le_bytes());
         assert_eq!(&cmd_slice[8..12], &0x0026_3FFFu32.to_le_bytes());
+    }
+
+    #[test]
+    fn event_log_body_shape() {
+        let body = build_event_log_body(0x0099, 900_000_000, 0x007D, 0xDEAD_BEEF, 1_700_000_000, 1_700_086_400);
+        // Same 28-byte L2 header + 12 bytes of command body.
+        assert_eq!(body.len(), 28 + 12);
+        let cmd_slice = &body[28..];
+        assert_eq!(&cmd_slice[0..4], &0x7010_0200u32.to_le_bytes());
+        assert_eq!(&cmd_slice[4..8], &1_700_000_000u32.to_le_bytes());
+        assert_eq!(&cmd_slice[8..12], &1_700_086_400u32.to_le_bytes());
+        // Verify ctrl=0xE0 made it into the L2 header (byte offset 4
+        // from the L2 signature start, after longwords + ctrl fields).
+        // L2 signature occupies [0..4]; longwords at [4]; ctrl at [5].
+        assert_eq!(body[5], 0xE0);
     }
 }
