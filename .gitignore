@@ -1,5 +1,7 @@
 /target
-Cargo.lock
+# Cargo.lock is COMMITTED — this workspace produces a binary
+# (hass-sma-daemon) so Cargo's own guidance says commit the lock file
+# for reproducible builds + so cargo-audit can scan it in CI.
 *.swp
 .DS_Store
 /tmp
