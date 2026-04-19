@@ -39,6 +39,10 @@ allow = [
     "Unicode-DFS-2016",
     "Zlib",
     "MPL-2.0",
+    # webpki-roots 1.x ships Mozilla's CA cert bundle under CDLA-Permissive-2.0.
+    # Data-permissive license analogous to Apache-2.0. Pulled only in
+    # the `pvoutput` feature's reqwest/rustls chain; not in default builds.
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]
