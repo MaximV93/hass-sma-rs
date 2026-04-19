@@ -3,6 +3,20 @@
 All notable changes to hass-sma-rs are tracked here. This project follows
 semantic-ish versioning; pre-1.0 is rapid iteration.
 
+## 0.1.44 — 2026-04-19 (MIS discovery groundwork)
+
+### Added
+- **INFO log on every logon reply** — on an MIS network the logon
+  broadcast hits multiple devices and each replies. The accepted one
+  was the only one previously surfaced; rejections went to DEBUG. Now
+  every reply logs at INFO with `susy`, `serial`, `code`, `accepted`
+  — useful as a de-facto piconet enumeration per session start, and
+  as groundwork for the planned multi-inverter support
+  (see [ADR 0005](docs/adr/0005-mis-multi-inverter.md)).
+
+No behavior change — still breaks on first retcode=0 logon reply,
+still rejects on 0x0100.
+
 ## 0.1.43 — 2026-04-19 (post-yield grace window)
 
 ### Fixed

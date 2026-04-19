@@ -500,6 +500,18 @@ impl<T: Transport> Session<T> {
                     app_serial: hdr.app_serial,
                     body: data.to_vec(),
                 };
+                // Log every logon-reply at INFO level. On an MIS network
+                // multiple devices reply; this line gives us a per-session
+                // enumeration of the piconet (device susy_id + serial +
+                // accept/reject). Useful input for planning multi-device
+                // support (ADR 0005) and for discovery docs.
+                info!(
+                    susy = reply.app_susy_id,
+                    serial = reply.app_serial,
+                    code = format!("0x{:04x}", reply.error_code),
+                    accepted = reply.error_code == 0,
+                    "logon reply"
+                );
                 // 0x0001 has been observed as "session already active" —
                 // not a hard rejection. If both inverters return 0x0001 we
                 // proceed with queries; if queries succeed, the session is
@@ -509,12 +521,6 @@ impl<T: Transport> Session<T> {
                     logged_in = Some(reply);
                     break;
                 }
-                debug!(
-                    code = format!("0x{:04x}", reply.error_code),
-                    susy = reply.app_susy_id,
-                    serial = reply.app_serial,
-                    "logon reply rejected by this device — waiting for another"
-                );
                 last_reject = Some(reply);
             }
             match logged_in {
