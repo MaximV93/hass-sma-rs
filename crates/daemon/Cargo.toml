@@ -28,3 +28,12 @@ clap = { version = "4", features = ["derive"] }
 humantime-serde = "1"
 prometheus-client = { workspace = true }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+
+# Optional HTTP client for the PVOutput.org uploader. Default OFF
+# to keep the binary small — users who want PVOutput build with
+# `--features pvoutput` or rely on a prebuilt image flavour.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"], optional = true }
+
+[features]
+default = []
+pvoutput = ["dep:reqwest"]

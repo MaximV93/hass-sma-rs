@@ -42,6 +42,11 @@ pub struct DaemonConfig {
     /// CSV sink is zero-config; TimescaleDB requires a live Postgres.
     #[serde(default)]
     pub archive: Option<ArchiveCfg>,
+    /// Optional PVOutput.org integration. Requires the daemon to be
+    /// built with `--features pvoutput` (off by default). When off,
+    /// this field is parsed but ignored — a warn log fires once.
+    #[serde(default)]
+    pub pvoutput: Option<crate::pvoutput::PvoutputCfg>,
 }
 
 /// Long-term storage configuration. Enable either csv_dir or timescale_url;

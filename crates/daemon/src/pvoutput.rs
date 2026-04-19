@@ -92,6 +92,7 @@ fn urlencode(s: &str) -> String {
 /// Convenience: produce a `Status` from the observed HA sensor values
 /// at a point in time. Missing readings (e.g. inverter asleep) yield
 /// `None` for that field.
+#[allow(dead_code)] // test-only for now
 pub fn status_at(
     timestamp: DateTime<chrono::Utc>,
     energy_today_wh: Option<u64>,
@@ -110,6 +111,7 @@ pub fn status_at(
 
 /// Helper for callers that don't yet speak DateTime: build a Status
 /// from a unix timestamp directly.
+#[allow(dead_code)] // test-only for now
 pub fn status_from_unix(
     unix_secs: u32,
     energy_today_wh: Option<u64>,

@@ -1,8 +1,10 @@
 //! hass-sma-daemon entrypoint.
 
 mod config;
-#[allow(dead_code)] // Wired in a future release; body builder + tests live here now.
+#[cfg_attr(not(feature = "pvoutput"), allow(dead_code))]
 mod pvoutput;
+#[cfg(feature = "pvoutput")]
+mod pvoutput_uploader;
 
 use anyhow::{Context, Result};
 use bluez_transport::{rfcomm::parse_bt_mac, RfcommTransport};
@@ -953,6 +955,48 @@ async fn main() -> Result<()> {
                 error!(error = %e, "inverter task exited with error");
             }
         }));
+    }
+
+    // Spawn PVOutput uploader tasks (one per configured system) when
+    // the `pvoutput` feature is compiled in AND config has pvoutput.
+    #[cfg(feature = "pvoutput")]
+    if let Some(pv) = cfg.pvoutput.as_ref() {
+        for sys in &pv.systems {
+            // Locate which `inverters:` entry owns this device-slot so
+            // the DeviceLabels match what the poll loop publishes.
+            let owner_slot = cfg
+                .inverters
+                .iter()
+                .find_map(|inv| {
+                    // Matches MIS mode (device listed under this
+                    // inverter's `devices`) OR legacy single-device
+                    // mode (inv.slot == sys.slot, no `devices`).
+                    let mis_match = inv.devices.iter().any(|d| d.slot == sys.slot);
+                    let legacy_match = inv.slot == sys.slot && inv.devices.is_empty();
+                    if mis_match || legacy_match {
+                        Some(inv.slot.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| sys.slot.clone());
+            let task = pvoutput_uploader::UploaderTask {
+                api_key: pv.api_key.clone(),
+                system_id: sys.system_id,
+                device_slot: owner_slot,
+                device_inner_slot: sys.slot.clone(),
+                interval: pv.upload_interval,
+                metrics: metrics.clone(),
+            };
+            tokio::spawn(pvoutput_uploader::upload_loop(task));
+        }
+    }
+    #[cfg(not(feature = "pvoutput"))]
+    if cfg.pvoutput.is_some() {
+        warn!(
+            "pvoutput config present but this build has `pvoutput` feature disabled. \
+             Rebuild with `--features pvoutput` to enable the uploader."
+        );
     }
 
     info!("running {} inverter tasks; Ctrl+C to stop", tasks.len());
