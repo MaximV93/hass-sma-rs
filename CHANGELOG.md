@@ -3,6 +3,38 @@
 All notable changes to hass-sma-rs are tracked here. This project follows
 semantic-ish versioning; pre-1.0 is rapid iteration.
 
+## 0.1.48 — 2026-04-19 (event log + PVOutput scaffolding + docs)
+
+### Added
+- **Event log query (ADR 0004) — wire layer shipped.** Not yet wired
+  into the daemon poll loop (waiting on first live validation against
+  a real SB inverter), but everything ELSE is in place:
+  - `L2Header::event_log_query` (ctrl=0xE0, ctrl2=0x0100)
+  - `build_event_log_body(pkt_id, app_serial, susy, serial, start, end)`
+  - `Session::query_event_log_for_device` with multi-packet reply
+    aggregation (capped at 32 fragments)
+  - `EventRecord` + `parse_event_log_records(body)` — typed 24-byte
+    record parser
+  - `event_tag_text(tag)` — hand-rolled starter TagList (operation
+    states, grid faults, system events, user actions)
+  - 4 unit tests covering body shape, record parsing, tag lookup,
+    empty-body resilience
+- **PVOutput.org scaffolding.** Config types, URL-encoded body
+  builder, 5 unit tests. HTTP uploader deliberately deferred to a
+  future feature-flagged module so the default binary stays small.
+
+### Docs
+- **GETTING_STARTED.md** — 3-scenario walkthrough (single-BT, MIS,
+  standalone Linux)
+- **ARCHITECTURE.md** — system diagram, crate layout, request
+  lifecycle, testing philosophy, extension points
+- **CONTRIBUTING.md** — dev setup, style guide,
+  reverse-engineering workflow
+- **README polish** — new "Getting started" section, refreshed
+  badges (76 tests, 0.1.47), updated comparison table and status
+  checklist
+- 76 workspace tests, clippy -D warnings clean, rustfmt clean.
+
 ## 0.1.47 — 2026-04-19 (probe subcommand + per-device Prometheus)
 
 ### Added
