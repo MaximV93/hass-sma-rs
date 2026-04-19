@@ -11,6 +11,18 @@
 # Prerequisites:
 # - Prometheus datasource wired to hass-sma-rs :9090/metrics
 # - Contact point configured for notification
+#
+# Label conventions:
+# - Session-level metrics (sma_inverter_awake, sma_handshake_errors_total,
+#   sma_bt_reconnects_total, sma_last_successful_poll_unix) carry only
+#   `slot` — the BT entry-point label from the daemon's `inverters:`
+#   config (e.g. "repeater" or "zolder" in single-device mode).
+# - Per-device metrics (sma_ac_power_watts, sma_dc_power_s*_watts,
+#   sma_energy_*_wh, sma_inverter_temperature_c, sma_grid_frequency_hz,
+#   etc.) carry BOTH `slot` AND `device`. In single-device mode these
+#   are equal; in MIS mode `slot`=repeater, `device`=actual inverter
+#   (zolder/garage). Alert annotations below use whichever label is
+#   most informative.
 apiVersion: 1
 
 groups:
@@ -98,7 +110,7 @@ groups:
               refId: A
         for: 30m
         annotations:
-          summary: "DC string imbalance on {{ $labels.slot }}: S1={{ $values.A }}W S2=..."
+          summary: "DC string imbalance on {{ $labels.device }}: S1={{ $values.A }}W S2=..."
           description: |
             String 1 differs from String 2 by > 30% for 30+ minutes while
             either string is producing meaningfully (> 100 W). Possible:
@@ -120,7 +132,7 @@ groups:
               refId: A
         for: 5m
         annotations:
-          summary: "{{ $labels.slot }} temperature {{ $values.A }}°C"
+          summary: "{{ $labels.device }} temperature {{ $values.A }}°C"
           description: |
             SB HF-30 series starts derating around 70-80°C. Sustained >75°C
             indicates ventilation issue or ambient too warm. Derating will
@@ -142,7 +154,7 @@ groups:
               refId: A
         for: 2m
         annotations:
-          summary: "Grid frequency {{ $values.A }}Hz outside 49.5-50.5 at {{ $labels.slot }}"
+          summary: "Grid frequency {{ $values.A }}Hz outside 49.5-50.5 at {{ $labels.device }}"
           description: |
             Belgian grid nominal is 50 Hz ± 1%. Sustained deviation means
             grid instability (not our problem) — inverter's overcurrent
