@@ -576,19 +576,33 @@ impl<T: Transport> Session<T> {
     /// Parsing typed values out of the payload is left to a higher layer
     /// (values.rs) because different queries emit different record shapes.
     pub async fn query(&mut self, kind: QueryKind) -> Result<Vec<u8>> {
+        let susy = self.inverter_susy_id;
+        let serial = self.inverter_serial;
+        self.query_for_device(susy, serial, kind).await
+    }
+
+    /// Query a specific device by susy_id + serial instead of the one
+    /// identified at init time. Needed for MIS multi-device polling
+    /// (one RFCOMM session, N inverters behind a repeater — each
+    /// request addresses the target device explicitly in the L2
+    /// header). See ADR 0005.
+    ///
+    /// Returns the raw record body on success; caller is responsible
+    /// for typed parsing (values.rs). Still matches reply pkt_id for
+    /// deterministic dispatch.
+    pub async fn query_for_device(
+        &mut self,
+        susy_id: u16,
+        serial: u32,
+        kind: QueryKind,
+    ) -> Result<Vec<u8>> {
         if self.state != SessionState::LoggedIn {
             return Err(SessionError::Protocol {
                 phase: "query-not-logged-in",
             });
         }
         let pkt_id = self.next_pcktid();
-        let body = build_query_body(
-            kind,
-            pkt_id,
-            self.app_serial,
-            self.inverter_susy_id,
-            self.inverter_serial,
-        );
+        let body = build_query_body(kind, pkt_id, self.app_serial, susy_id, serial);
         let frame_bytes = FrameBuilder::new(
             self.cfg.local_bt,
             [0xFF; 6], // SBFspot always uses the unknown peer here
@@ -597,7 +611,7 @@ impl<T: Transport> Session<T> {
         .extend(&body)
         .build();
         self.transport.send_frame(&frame_bytes).await?;
-        debug!(?kind, pkt_id, "sent query");
+        debug!(?kind, pkt_id, target_serial = serial, "sent query");
 
         // Match reply on sent pkt_id (SBFspot's approach). Skips stray
         // replies from previous requests that may still be in the buffer.
