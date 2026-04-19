@@ -1,6 +1,8 @@
 //! hass-sma-daemon entrypoint.
 
 mod config;
+#[allow(dead_code)] // Wired in a future release; body builder + tests live here now.
+mod pvoutput;
 
 use anyhow::{Context, Result};
 use bluez_transport::{rfcomm::parse_bt_mac, RfcommTransport};
