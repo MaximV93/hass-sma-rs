@@ -3,6 +3,26 @@
 All notable changes to hass-sma-rs are tracked here. This project follows
 semantic-ish versioning; pre-1.0 is rapid iteration.
 
+## 0.1.45 — 2026-04-19 (persistent app_serial across restarts)
+
+### Fixed
+- **app_serial now persists across addon restarts.** Previously it was
+  regenerated from `SystemTime::now() + slot_hash` at each startup.
+  Every addon restart → new app_serial → inverter sees an unfamiliar
+  client while still holding the PREVIOUS session (app_serial tracked
+  for ~15 min) → logon rejected with retcode 0x0001
+  ("session already active"). Two-inverter piconets are particularly
+  affected because BOTH inverters hold the stale session state.
+- Now stored at `/data/app_serial_<slot>` (HA-persistent, survives
+  `ha addons update` and OS-level reboots). Fallback to the old
+  time+hash minting on first run / if the file is missing or
+  corrupted. Write failures log a warning but don't abort.
+
+Caught the hard way while probing MIS peer MACs — restarting the
+addon a few times in a row left zombie sessions on both zolder and
+garage inverters, locking everyone out for 10+ minutes until the
+inverter-side cache expired.
+
 ## 0.1.44 — 2026-04-19 (MIS discovery groundwork)
 
 ### Added

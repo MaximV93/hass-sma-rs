@@ -220,6 +220,42 @@ async fn publish_query_result(
     }
 }
 
+/// Generate a new stable app_serial for this inverter slot and persist
+/// it to `path` so future addon restarts reuse the same id. Errors are
+/// logged but not propagated — a write failure still returns the new
+/// serial; next restart will just mint another one.
+fn mint_new_app_serial(slot: &str, path: &std::path::Path) -> u32 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as u32)
+        .unwrap_or(900_000_000);
+    // Mix the slot name's hash in so multiple inverters get distinct ids.
+    let mut h = secs;
+    for b in slot.bytes() {
+        h = h.wrapping_mul(31).wrapping_add(b as u32);
+    }
+    let val = 900_000_000u32.wrapping_add(h & 0x05F5_E0FF);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::write(path, val.to_le_bytes()) {
+        Ok(()) => info!(
+            slot,
+            app_serial = val,
+            path = %path.display(),
+            "minted + persisted new app_serial"
+        ),
+        Err(e) => warn!(
+            slot,
+            app_serial = val,
+            error = %e,
+            "minted new app_serial but could not persist (will re-mint on restart)"
+        ),
+    }
+    val
+}
+
 /// Per-inverter task: connect, logon, poll until SIGTERM.
 async fn run_inverter(
     inv_cfg: InverterCfg,
@@ -263,18 +299,28 @@ async fn run_inverter(
     // Stable session identity: inverter tracks by app_serial. Same value
     // across reconnects → inverter sees us as the same client + accepts the
     // next logon instead of returning 0x0001 "session already active".
+    //
+    // We persist the serial to /data (HA addon-persistent storage) so
+    // that even addon restarts/upgrades reuse the same id. Without this,
+    // every `ha addons restart` strands the previous session on the
+    // inverter for ~15 minutes until its internal cache expires, locking
+    // everyone else (including ourselves under a new serial) out with
+    // retcode 0x0001 "session already active". Learned 2026-04-19 during
+    // MIS probing — fix shipped in 0.1.45.
     let stable_app_serial: u32 = {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as u32)
-            .unwrap_or(900_000_000);
-        // Mix the slot name's hash in so multiple inverters get distinct ids.
-        let mut h = secs;
-        for b in inv_cfg.slot.bytes() {
-            h = h.wrapping_mul(31).wrapping_add(b as u32);
+        use std::path::PathBuf;
+        let path = PathBuf::from(format!("/data/app_serial_{}", inv_cfg.slot));
+        if let Ok(bytes) = std::fs::read(&path) {
+            if bytes.len() == 4 {
+                let val = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                info!(slot = %inv_cfg.slot, app_serial = val, "restored persisted app_serial");
+                val
+            } else {
+                mint_new_app_serial(&inv_cfg.slot, &path)
+            }
+        } else {
+            mint_new_app_serial(&inv_cfg.slot, &path)
         }
-        900_000_000u32.wrapping_add(h & 0x05F5_E0FF)
     };
 
     let mut backoff = MIN_BACKOFF;
