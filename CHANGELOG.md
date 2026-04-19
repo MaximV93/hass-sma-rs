@@ -3,6 +3,26 @@
 All notable changes to hass-sma-rs are tracked here. This project follows
 semantic-ish versioning; pre-1.0 is rapid iteration.
 
+## 0.1.51 — 2026-04-19 (MaxFeedInPower parser fix)
+
+### Fixed
+- `parse_single_watts_record` now falls through to min/max slots when
+  the "current" slot is zero. Live 0.1.50 against the real SB
+  3000HF-30 showed MaxFeedInPower reports its value in the min slot
+  (offset 8..12), not the current slot (16..20). NominalAcPower
+  wasn't affected because it populates all slots with the same value.
+- New regression test: `parse_single_watts_reads_min_slot_when_current_is_zero`.
+
+### Notes
+- Live observations from 0.1.50:
+  - **NominalAcPower works**: zolder → 3000 W, garage → 2000 W ✓
+  - **MaxFeedInPower works** after this fix: both → nameplate (no
+    curtailment configured on this install)
+  - **CosPhi + ActivePowerLimit** return retcode 0x15 ("LRI not
+    available") on SB HF-30 firmware. Sensors stay `unknown`.
+    HF-30 era predates those specific LRI codes; legacy CosPhi LRI
+    `0x00237400` may respond but isn't wired yet.
+
 ## 0.1.50 — 2026-04-19 (4 new LRIs — CosPhi, nameplate, feed-in limit, active limit)
 
 ### Added
