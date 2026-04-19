@@ -1,17 +1,31 @@
 # hass-sma-rs
 
 [![CI](https://github.com/MaximV93/hass-sma-rs/actions/workflows/ci.yaml/badge.svg)](https://github.com/MaximV93/hass-sma-rs/actions/workflows/ci.yaml)
-![tests](https://img.shields.io/badge/tests-62%20green-brightgreen)
+![tests](https://img.shields.io/badge/tests-76%20green-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue)
-![rust](https://img.shields.io/badge/rust-stable-orange)
+![rust](https://img.shields.io/badge/rust-1.75%2B-orange)
+![version](https://img.shields.io/badge/version-0.1.47-blue)
 
 Clean-room Rust implementation of the SMA Sunny Boy Bluetooth
 integration for Home Assistant. Replaces the bash + SBFspot C++ stack
 with a single type-safe daemon.
 
-**Live since 2026-04-18.** 38+ addon versions iterated against a real
-SB 3000HF-30. 12 protocol bugs reverse-engineered and fixed with
-regression tests. 27 MQTT sensors + 15 Prometheus metrics per inverter.
+**Live since 2026-04-18.** 47 addon versions iterated against real
+SB 3000HF-30 + SB 2000HF-30 inverters behind a BT repeater (MIS mode).
+14 protocol bugs reverse-engineered and fixed with regression tests.
+29 MQTT sensors per device + 15 Prometheus metric families.
+
+## Getting started
+
+**New user?** → [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) —
+5-minute walkthrough for HA addon, MIS multi-device, or standalone
+Linux setups.
+
+**Contributing?** → [CONTRIBUTING.md](CONTRIBUTING.md) — dev setup,
+test philosophy, reverse-engineering workflow.
+
+**Architecture deep-dive?** → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+— crate layout, request lifecycle, design rationale.
 
 ## Why
 
@@ -21,10 +35,13 @@ regression tests. 27 MQTT sensors + 15 Prometheus metrics per inverter.
 | Handshake tax | ~5 s / poll | ~5 s / poll | 1 s **once** |
 | MQTT LWT | ❌ | ❌ | ✅ sensors flip `unavailable` on crash |
 | Sleep detection | ❌ | ❌ | ✅ adaptive backoff after sunset |
-| Metrics | ❌ | MQTT heartbeat | ✅ **15 Prometheus families** |
+| Metrics | ❌ | MQTT heartbeat | ✅ **15 Prometheus families**, per-device labels |
+| MIS multi-inverter | ✅ | ✅ | ✅ **`devices:` round-robin in one session** |
 | Parallel-run | ❌ | ❌ | ✅ `yield_every` window |
-| Tests | ❌ | bash smoke only | ✅ **62** unit + integration + fuzz |
-| Event log | ✅ | ✅ via MariaDB | ⏳ deferred — see [ADR 0004](docs/adr/0004-event-log-deferred.md) |
+| Restart-safe session identity | ❌ | ❌ | ✅ `/data/app_serial_<slot>` persisted |
+| Probe subcommand | ❌ | ❌ | ✅ `hass-sma-daemon probe --mac ...` |
+| Tests | ❌ | bash smoke only | ✅ **76** unit + integration + proptest fuzz |
+| Event log | ✅ | ✅ via MariaDB | ⏳ wire-layer shipped, daemon integration pending |
 
 Full matrix + measurement methodology: [docs/COMPARISON.md](docs/COMPARISON.md).
 
@@ -89,21 +106,27 @@ docs/
 
 ## Status
 
-**0.1.40**. Live at a production HA instance since 2026-04-18.
+**0.1.47** live at a production HA instance since 2026-04-18. 2 SB
+inverters monitored via MIS (zolder SB 3000HF-30 + garage SB 2000HF-30
+behind shared BT repeater). Daily production visibility recovered +
+improved.
 
 - [x] Core protocol: L1 + L2 parse/build, FCS-16, byte stuffing
-- [x] Handshake + logon (full SBFspot MIS-style sequence)
-- [x] 11 query kinds with typed parsers, 28 MQTT sensors
-- [x] MQTT LWT availability
+- [x] Handshake + logon (full SBFspot MIS-style sequence, 14 bugs reverse-engineered)
+- [x] 11 query kinds with typed parsers, 29 MQTT sensors per device
+- [x] MIS multi-inverter support (`devices:` round-robin, ADR 0005)
+- [x] Persistent app_serial (`/data/app_serial_<slot>` — survives addon restarts)
+- [x] Probe subcommand (`hass-sma-daemon probe --mac ...`) for safe enumeration
+- [x] Graceful LOGOFF on yield + post-yield grace window
+- [x] MQTT LWT availability per device
 - [x] Adaptive sleep backoff + EHOSTDOWN detection
-- [x] Prometheus `/metrics` on :9090
-- [x] Parallel-run yield window for coexistence with other SMA integrations
+- [x] Prometheus `/metrics` on :9090 with per-device labels
 - [x] Archive sink: TimescaleDB or CSV (opt-in)
-- [x] 62 tests (unit + integration + proptest fuzz)
+- [x] 76 tests (unit + integration + proptest fuzz)
 - [x] Hardened systemd unit
-- [x] 4 ADRs documenting major decisions
-- [ ] Event log query (deferred, [ADR 0004](docs/adr/0004-event-log-deferred.md))
-- [ ] PVOutput upload (low priority, easy to add)
+- [x] 5 ADRs documenting major decisions
+- [x] Event log: wire layer, parser, TagList — daemon integration pending live-wire validation
+- [x] PVOutput: body builder + config types — HTTP uploader pending
 
 ## License
 
