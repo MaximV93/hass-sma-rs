@@ -3,6 +3,7 @@ name = "inverter-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Per-inverter session state machine: handshake, logon, query. Transport-agnostic."
 
 [dependencies]

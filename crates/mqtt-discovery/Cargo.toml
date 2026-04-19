@@ -3,6 +3,7 @@ name = "mqtt-discovery"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Home Assistant MQTT discovery publisher. Owns all per-inverter sensor configs — replaces the sensorsgen-addon dependency of the bash fork."
 
 [dependencies]

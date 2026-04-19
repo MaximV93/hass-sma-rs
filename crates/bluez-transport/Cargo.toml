@@ -3,6 +3,7 @@ name = "bluez-transport"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Linux BlueZ RFCOMM transport for the SMA BT protocol. Trait-based for mockability; real socket only compiled on Linux."
 
 [dependencies]

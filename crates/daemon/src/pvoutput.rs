@@ -62,10 +62,7 @@ pub struct Status {
 pub fn build_status_body(s: &Status) -> String {
     let d = s.timestamp.format("%Y%m%d").to_string();
     let t = s.timestamp.format("%H:%M").to_string();
-    let mut parts = vec![
-        format!("d={d}"),
-        format!("t={}", urlencode(&t)),
-    ];
+    let mut parts = vec![format!("d={d}"), format!("t={}", urlencode(&t))];
     if let Some(v) = s.energy_today_wh {
         parts.push(format!("v1={v}"));
     }
@@ -132,7 +129,9 @@ mod tests {
     #[test]
     fn body_minimal_shape() {
         let s = Status {
-            timestamp: chrono::Utc.with_ymd_and_hms(2026, 4, 19, 13, 30, 0).unwrap(),
+            timestamp: chrono::Utc
+                .with_ymd_and_hms(2026, 4, 19, 13, 30, 0)
+                .unwrap(),
             energy_today_wh: Some(9876),
             power_w: Some(2500),
             temperature_c: None,

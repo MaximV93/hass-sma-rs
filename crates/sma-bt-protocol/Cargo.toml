@@ -3,6 +3,7 @@ name = "sma-bt-protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 description = "Pure-Rust implementation of the SMA Bluetooth protocol used by SMA Sunny Boy HF-series inverters. Reverse-engineered from the SBFspot codebase (AGPL); no source code copied, only the wire format replicated."
 
 [dependencies]

@@ -143,7 +143,14 @@ mod tests {
 
     #[test]
     fn event_log_body_shape() {
-        let body = build_event_log_body(0x0099, 900_000_000, 0x007D, 0xDEAD_BEEF, 1_700_000_000, 1_700_086_400);
+        let body = build_event_log_body(
+            0x0099,
+            900_000_000,
+            0x007D,
+            0xDEAD_BEEF,
+            1_700_000_000,
+            1_700_086_400,
+        );
         // Same 28-byte L2 header + 12 bytes of command body.
         assert_eq!(body.len(), 28 + 12);
         let cmd_slice = &body[28..];
