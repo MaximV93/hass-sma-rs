@@ -33,7 +33,8 @@ semantic-ish versioning; pre-1.0 is rapid iteration.
 - **README polish** — new "Getting started" section, refreshed
   badges (76 tests, 0.1.47), updated comparison table and status
   checklist
-- 76 workspace tests, clippy -D warnings clean, rustfmt clean.
+- 77 workspace tests (includes mis_labels_are_per_device, event-log
+  trio, pvoutput quintet), clippy -D warnings clean, rustfmt clean.
 
 ## 0.1.47 — 2026-04-19 (probe subcommand + per-device Prometheus)
 

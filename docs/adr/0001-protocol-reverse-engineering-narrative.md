@@ -193,6 +193,37 @@ attribute slots at offsets 8/12/.../36. Each is a u32 where
 all eight.
 **Fix**: dedicated 40-byte record loop for `parse_type_label_raw`.
 
+## Bugs added after original narrative
+
+### 14. Yield-window teardown needs LOGOFF + post-yield grace (2026-04-19)
+Two compounding issues observed live at 07:54 during the first sunrise
+with parallel-run yield enabled:
+
+- Dropping the RFCOMM socket without LOGOFF left a zombie session on
+  the inverter for ~15 min. Post-yield reconnects hit EHOSTDOWN.
+  Fixed in 0.1.42 by `Session::graceful_close()` sending a proper
+  LOGOFF (broadcast dst, L1 ctrl=0x0001, 150ms grace).
+- Even with clean LOGOFF, the inverter's BT radio can take up to a
+  minute to re-advertise. The adaptive-backoff code escalated to a
+  10-minute "asleep" state after 3 fast EHOSTDOWNs. Fixed in 0.1.43
+  with a 180-second post-yield grace window that uses 15s retries
+  without incrementing the sleep-streak.
+
+## Topology addendum (2026-04-19)
+
+The original narrative assumed single-inverter direct-BT installs.
+Real-world MIS topology: one BT repeater fronts N inverters on an
+internal bus. The MAC on the inverter nameplate sticker is often
+actually the repeater's radio. At the protocol layer each L2 request
+addresses a specific `(susy_id, serial)` in the header — the repeater
+routes, no handshake changes needed for multi-device polling.
+See [ADR 0005](0005-mis-multi-inverter.md).
+
+Implication for this narrative: every bug here was found BEHIND a
+repeater. The protocol is wire-identical whether you have one
+inverter or ten. Only the daemon's poll loop needed to grow a
+round-robin over configured devices.
+
 ## Consequences
 
 Every bug above has a regression test in the Rust codebase using either
