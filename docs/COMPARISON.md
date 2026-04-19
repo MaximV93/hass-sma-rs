@@ -2,7 +2,7 @@
 
 Stock SBFspot · haos-sbfspot (powerslider fork) · hass-sma-rs (clean-room Rust)
 
-Last updated: 2026-04-18 · Generated after full live validation against zolder inverter (SB 3000HF-30, susy=131, serial=2120121246, firmware 02.30.06.R).
+Last updated: 2026-04-19 · Full live validation against zolder inverter (SB 3000HF-30, susy=131, serial=2120121246, firmware 02.30.06.R). 28 sensors live in HA, 64 workspace tests green, 43 addon releases, 14 protocol-level bugs reverse-engineered + fixed.
 
 ---
 
@@ -94,8 +94,10 @@ Issues discovered in 24h of live iteration that neither stock SBFspot's source n
 10. **LRI extraction is `code & 0x00FF_FF00`**, not `& 0x00FF_FFFF`. Low byte is `cls`, high byte is `dataType`.
 11. **Value offset in 28-byte spot records is [16..20]**, not [8..12]. Offsets 8 and 12 carry min/max for archived data; only the "current" slot is at 16.
 12. **Records can be truncated to 20 bytes** — inverter sometimes omits trailing min/max/flag fields when they're all NaN. Parser now accepts 20..28 range.
+13. **TypeLabel records are 40 bytes** with 8 attribute slots at offsets 8..40; tag-id in low 24 bits, high byte 0x01 = selected, 0xFE = end-of-list. Was reading a plain `u32_value_28(offset 16)` producing garbage like "TagID 842084913" (fixed in 0.1.35).
+14. **Parallel-run yield needs LOGOFF + post-yield grace** — observed 2026-04-19 07:54: dropping the RFCOMM socket without sending a LOGOFF kept an app_serial alive on the inverter (0.1.42); even after LOGOFF the inverter BT can take up to a minute to re-advertise, so the reconnect path must NOT escalate to 10-min sleep-backoff during a ~3 min grace window (0.1.43).
 
-All 12 fixes are committed with regression tests + hex dumps from real captures.
+All 14 fixes are committed with regression tests + hex dumps from real captures.
 
 ---
 
@@ -106,7 +108,7 @@ All 12 fixes are committed with regression tests + hex dumps from real captures.
 - **Faster data** — persistent BT session eliminates the ~5 s per-poll handshake cost. Our 60-s poll actually delivers 11 metrics each minute; haos-sbfspot's 60-s poll spends 5-10 s handshaking + 5-10 s querying sequentially → ~20 s end-to-end.
 - **Better availability signal** — MQTT LWT means HA flips sensors to `unavailable` on daemon crash or broker loss. haos-sbfspot's sensors go stale without any indicator.
 - **Sleep-aware** — no more 50-200 failed reconnects/hour during the night. haos-sbfspot's cron keeps spinning up SBFspot processes that all fail the same way.
-- **Richer per-inverter data** — 25 HA entities vs 15. Per-phase and per-string split enables panel-level alerting (detect a dead string via `dc_power_s2 < dc_power_s1 - 30%`).
+- **Richer per-inverter data** — 28 HA entities vs 15. Per-phase and per-string split enables panel-level alerting (detect a dead string via `dc_power_s2 < dc_power_s1 - 30%`).
 
 ### Observability
 
@@ -117,7 +119,7 @@ All 12 fixes are committed with regression tests + hex dumps from real captures.
 ### Safety / correctness
 
 - **Rust type system** rules out entire classes of C++ bugs SBFspot has historically had (buffer overflow on pcktBuf, integer narrowing, unchecked pointer arithmetic in `get_long(pcktBuf + N)`).
-- **54 unit/integration tests** with 290-frame live-capture fixture — stock SBFspot has none, haos-sbfspot has a few bash-wrapper tests.
+- **64 unit/integration/proptest tests** with 290-frame live-capture fixture — stock SBFspot has none, haos-sbfspot has a few bash-wrapper tests. Fuzz suite runs 1536 random iterations per proptest property over 6 parse invariants.
 - **Handshake + logon contract test** proves FrameBuilder output is byte-exact against the real inverter's `0000-send.hex` capture.
 
 ### Deployment
@@ -129,10 +131,11 @@ All 12 fixes are committed with regression tests + hex dumps from real captures.
 
 ## What's missing vs haos-sbfspot
 
-- **Historic/archived data** (5-min resolution) — the `storage` crate is scaffolded for TimescaleDB but not wired. haos-sbfspot writes to MariaDB via SBFspot's native archive path.
+- **Event log** — SBFspot reads inverter event history (error codes, warnings). Explicitly deferred, see [ADR 0004](adr/0004-event-log-deferred.md) — requires multi-packet reply handling + full TagList table + ctrl=0xE0 L2 header.
 - **PVOutput upload** — trivial to add if needed. No current demand from the user.
-- **Event log** — SBFspot reads inverter event history (error codes, warnings). Not parsed by our daemon yet.
 - **Multi-language support** — SBFspot has localized CSV column headers. Not applicable since we only speak MQTT.
+
+Historic/archived data is now wired in 0.1.40+ via opt-in `archive:` config (CSV zero-config OR TimescaleDB).
 
 ---
 
@@ -141,9 +144,9 @@ All 12 fixes are committed with regression tests + hex dumps from real captures.
 | Phase | Status | Exit criterion |
 |---|---|---|
 | 1. Protocol parity + live validation | ✅ **done** (2026-04-18) | ≥10 real metrics live in HA |
-| 2. Parallel run | ⚠️ **tested, see below** | hass-sma-rs + haos-sbfspot coexist over 7 days, no regressions |
+| 2. Parallel run | ✅ **done** (2026-04-19) | Yield mechanism validated over 2 full cycles post-0.1.43 |
 | 3. Cutover | 📋 pending | haos-sbfspot uninstalled, dashboards migrated to `sensor.sbfspot_*` namespace |
-| 4. Archive backfill | 📋 pending | TimescaleDB crate wired, 5-min samples stored, HA LongTermStatistics ingesting |
+| 4. Archive backfill | ✅ **wired** (0.1.40) | CSV per-day + TimescaleDB hypertable both ship; enabled via `archive:` config |
 
 ### Phase 2 parallel-run findings (2026-04-18 17:30)
 
@@ -172,10 +175,11 @@ without entity collisions.
 
 ## Effort summary (this session)
 
-- **Duration**: ~24h of active iteration (2026-04-17 evening → 2026-04-18 mid-afternoon)
-- **Commits**: 40+ on hass-sma-rs, 30+ on hassio-addons/hass-sma-rs addon manifest
-- **Build iterations**: 30 addon versions (0.1.1 → 0.1.30)
-- **Bugs resolved in live iteration**: 12 protocol-level (see above) + ~8 ops-level (EHOSTDOWN handling, EBUSY coexistence, cosign regression, etc.)
-- **Test coverage**: 0 → 54 unit + integration tests, 290-frame fixture suite
+- **Duration**: ~48h of active iteration (2026-04-17 evening → 2026-04-19 morning)
+- **Commits**: 60+ on hass-sma-rs, 40+ on hassio-addons/hass-sma-rs addon manifest
+- **Build iterations**: 43 addon versions (0.1.1 → 0.1.43)
+- **Bugs resolved in live iteration**: 14 protocol-level + ~10 ops-level (EHOSTDOWN handling, EBUSY coexistence, cosign regression, yield-window LOGOFF, post-yield grace, etc.)
+- **Test coverage**: 0 → 64 unit + integration + proptest fuzz tests, 290-frame live-capture fixture suite
+- **Live deployment**: continuous since 2026-04-18; zolder inverter polled every 60s, 11 queries/cycle, 9-12 h/day active, MQTT + Prometheus exports both live
 
 Reference implementation: [SBFspot](https://github.com/SBFspot/SBFspot) — license CC BY-NC-SA for protocol reverse-engineering; all source written clean-room from public SMA protocol observation + hex capture analysis.
