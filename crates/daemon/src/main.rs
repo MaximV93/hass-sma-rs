@@ -19,11 +19,12 @@ use inverter_client::values::{
 };
 use mqtt_discovery::{DeviceKind, DiscoveryPublisher, InverterIdentity, MqttClientConfig};
 use sma_bt_protocol::{auth::UserGroup, commands::QueryKind};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use storage::{CsvSink, ReadingSink, StorageWriter};
 use telemetry::{init_tracing, metrics::InverterLabels, serve_metrics, MetricsRegistry};
 use tokio::signal;
@@ -736,6 +737,23 @@ async fn run_inverter(
         let session_start = chrono::Utc::now();
         let mut ticker = tokio::time::interval(inv_cfg.poll_interval);
         let mut poll_count: u32 = 0;
+        // Per-target failure isolation (Phase A, 0.1.52). Resets on every
+        // session reconnect — a fresh BT session gives every device another
+        // chance to respond. Within a single session these maps accumulate
+        // consecutive failure counts + cooldown deadlines so we don't burn
+        // 15s × N queries on a silent device every tick.
+        //
+        // BACKGROUND: pre-0.1.52 the daemon used `break 'targets` on the
+        // first per-device query error, then `break` to reconnect. In MIS
+        // mode where one target is silent (e.g. asleep, BT range issue,
+        // unregistered) every cycle aborted at 15s, dragging session_uptime
+        // down to 1-13s and turning fresh-data delivery for the WORKING
+        // target into 5-7s windows separated by 30-60s reconnect handshakes.
+        let mut target_consecutive_failures: HashMap<u32, u32> = HashMap::new();
+        let mut target_skip_until: HashMap<u32, Instant> = HashMap::new();
+        // Cooldown ladder: 1st-3rd failure no cooldown, 3rd onward escalates.
+        const COOLDOWN_THRESHOLD: u32 = 3;
+        const COOLDOWN_LADDER_SECS: &[u64] = &[60, 300, 900, 1800];
         loop {
             ticker.tick().await;
             metrics.polls_total.get_or_create(&lbl).inc();
@@ -757,11 +775,12 @@ async fn run_inverter(
                 // the reconnect path will treat EHOSTDOWN as "inverter BT
                 // still re-advertising" → keep retrying every
                 // POST_YIELD_RETRY instead of escalating to 10-min sleep.
-                post_yield_deadline = Some(std::time::Instant::now() + POST_YIELD_GRACE);
+                post_yield_deadline = Some(Instant::now() + POST_YIELD_GRACE);
                 break; // outer loop reconnects
             }
 
             let mut cycle_ok = true;
+            let mut targets_published_this_tick: u32 = 0;
             let mut session_error: Option<String> = None;
 
             'targets: for (id, susy, serial) in targets.iter() {
@@ -774,6 +793,21 @@ async fn run_inverter(
                     slot: inv_cfg.slot.clone(),
                     device: id.slot.clone(),
                 };
+
+                // Cooldown gate: if this target hit the threshold recently,
+                // skip its queries for the configured backoff window. Saves
+                // BT bandwidth + keeps the session active for working
+                // targets. Cooldown expires naturally — one cycle past
+                // expiry the target gets queried again.
+                if let Some(skip_until) = target_skip_until.get(serial).copied() {
+                    if Instant::now() < skip_until {
+                        continue 'targets;
+                    } else {
+                        target_skip_until.remove(serial);
+                    }
+                }
+
+                let mut target_failed = false;
                 for kind in per_tick_queries.iter() {
                     match session.query_for_device(*susy, *serial, *kind).await {
                         Ok(body) => {
@@ -784,35 +818,84 @@ async fn run_inverter(
                         }
                         Err(e) => {
                             metrics.poll_errors_total.get_or_create(&lbl).inc();
+                            // Discriminate session-level failure (transport
+                            // dead, malformed handshake, auth fail) from
+                            // per-device silence (target didn't reply but
+                            // the BT session is alive for other targets).
+                            // See SessionError::is_session_fatal.
+                            if e.is_session_fatal() {
+                                warn!(
+                                    slot = %id.slot, serial = *serial, ?kind, error = %e,
+                                    "session-fatal query error — tearing down + reconnecting"
+                                );
+                                session_error = Some(format!("{e}"));
+                                let _ = publisher
+                                    .publish_value(id, "poll_status", "error")
+                                    .await;
+                                cycle_ok = false;
+                                break 'targets;
+                            }
                             warn!(
                                 slot = %id.slot, serial = *serial, ?kind, error = %e,
-                                "query failed — cycle aborted"
+                                "per-device query failed — skipping remaining queries for this target"
                             );
-                            session_error = Some(format!("{e}"));
-                            let _ = publisher.publish_value(id, "poll_status", "error").await;
-                            cycle_ok = false;
-                            break 'targets;
+                            let _ = publisher
+                                .publish_value(id, "poll_status", "error")
+                                .await;
+                            target_failed = true;
+                            break;
                         }
                     }
                 }
-                let now = chrono::Utc::now();
-                let _ = publisher
-                    .publish_value(id, "last_poll", now.to_rfc3339())
-                    .await;
-                let _ = publisher.publish_value(id, "poll_status", "ok").await;
-                let uptime_s = (now - session_start).num_seconds();
-                let _ = publisher
-                    .publish_value(id, "session_uptime", uptime_s)
-                    .await;
+
+                if !target_failed {
+                    // Successful poll — clear any prior failure state.
+                    target_consecutive_failures.insert(*serial, 0);
+                    targets_published_this_tick += 1;
+                    let now = chrono::Utc::now();
+                    let _ = publisher
+                        .publish_value(id, "last_poll", now.to_rfc3339())
+                        .await;
+                    let _ = publisher.publish_value(id, "poll_status", "ok").await;
+                    let uptime_s = (now - session_start).num_seconds();
+                    let _ = publisher
+                        .publish_value(id, "session_uptime", uptime_s)
+                        .await;
+                    let _ = publisher
+                        .publish_value(id, "consecutive_failures", 0_i64)
+                        .await;
+                } else {
+                    // Per-target failure (session is healthy). Increment
+                    // counter; once >= COOLDOWN_THRESHOLD, schedule a
+                    // skip window from the ladder.
+                    let cf = {
+                        let entry = target_consecutive_failures.entry(*serial).or_insert(0);
+                        *entry = entry.saturating_add(1);
+                        *entry
+                    };
+                    let _ = publisher
+                        .publish_value(id, "consecutive_failures", cf as i64)
+                        .await;
+                    if cf >= COOLDOWN_THRESHOLD {
+                        let ladder_idx = (cf - COOLDOWN_THRESHOLD) as usize;
+                        let secs = COOLDOWN_LADDER_SECS
+                            .get(ladder_idx)
+                            .copied()
+                            .unwrap_or_else(|| {
+                                *COOLDOWN_LADDER_SECS.last().unwrap_or(&1800)
+                            });
+                        let until = Instant::now() + Duration::from_secs(secs);
+                        target_skip_until.insert(*serial, until);
+                        warn!(
+                            slot = %id.slot, serial = *serial,
+                            consecutive_failures = cf, cooldown_secs = secs,
+                            "target entering cooldown after consecutive failures"
+                        );
+                    }
+                }
             }
 
-            if cycle_ok {
-                let now = chrono::Utc::now();
-                metrics
-                    .last_successful_poll_unix
-                    .get_or_create(&lbl)
-                    .set(now.timestamp());
-            } else {
+            if !cycle_ok {
                 warn!(
                     slot = %inv_cfg.slot,
                     error = %session_error.as_deref().unwrap_or("unknown"),
@@ -820,6 +903,17 @@ async fn run_inverter(
                 );
                 break; // inner loop → reconnect
             }
+            if targets_published_this_tick > 0 {
+                let now = chrono::Utc::now();
+                metrics
+                    .last_successful_poll_unix
+                    .get_or_create(&lbl)
+                    .set(now.timestamp());
+            }
+            // else: session alive but every target was either in cooldown
+            // or per-target-failed this tick. Don't reconnect — wait for
+            // the next ticker. Eventual transport-level idle timeout will
+            // force a reconnect if every target stays silent indefinitely.
         }
         let _ = session.graceful_close().await;
         // Outer loop iterates: reconnect.

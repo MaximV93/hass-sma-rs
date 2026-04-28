@@ -3,6 +3,43 @@
 All notable changes to hass-sma-rs are tracked here. This project follows
 semantic-ish versioning; pre-1.0 is rapid iteration.
 
+## 0.1.52 — 2026-04-28 (per-target failure isolation)
+
+### Fixed (root cause of zolder flap-storm)
+- **MIS multi-target loop no longer aborts whole cycle on per-device
+  silence.** Pre-0.1.52 the `'targets:` loop did `break 'targets` on
+  ANY query error from any device, then `break` to reconnect — turning
+  one silent inverter (e.g. asleep, BT range, unregistered) into a
+  full session teardown every cycle. Live observations on Maxim's
+  install: zolder responds in 250ms but garage was silent → cycle
+  aborted at 15s timeout → reconnect handshake (10-30s) → repeat.
+  `session_uptime` thrashed at 1-13s for hours.
+- New `SessionError::is_session_fatal()` discriminator: errors during
+  handshake phases (`hello`, `init`, `topology`, `logon`) tear down
+  the session as before. Errors during `query` / `event-log` phases
+  are treated as per-device — the silent target is skipped, the next
+  target gets its turn, the BT session keeps running.
+
+### Added
+- Per-target consecutive-failure counter + cooldown ladder. After 3
+  successive failures on a single target, that target enters cooldown
+  (60 s → 5 min → 15 min → 30 min ceiling) — saves 15 s × N queries
+  per tick on a known-silent inverter while preserving BT bandwidth
+  for working ones.
+- New MQTT field `consecutive_failures` per inverter slot. Published
+  every cycle; 0 on a successful poll, increments on per-device
+  failure. Useful for HA-side dashboards / alerting.
+- 9 new unit tests covering `is_session_fatal` per-phase semantics
+  for `Silent`, `Protocol`, `LogonFailed`, `FirmwareTooOld`,
+  `Transport(Io)`, `Transport(Timeout)`, and `Parse` errors.
+
+### Notes
+- Cooldown state resets on every BT session reconnect — a fresh
+  session gives every device a clean retry slot.
+- Per-target failure path is best-effort: per-device errors during
+  the one-shot announce phase already swallow errors via
+  `if let Ok(...)`, so behaviour there is unchanged from 0.1.51.
+
 ## 0.1.51 — 2026-04-19 (MaxFeedInPower parser fix)
 
 ### Fixed

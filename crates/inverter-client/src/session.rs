@@ -32,6 +32,41 @@ pub enum SessionError {
     Silent { phase: &'static str },
 }
 
+impl SessionError {
+    /// Returns true if this error indicates the BT session itself is broken
+    /// (transport down, malformed handshake, auth failure) — caller MUST
+    /// reconnect to recover. Returns false for per-device timeouts and
+    /// per-device protocol shape errors during query/event-log: in MIS
+    /// multi-inverter networks one silent device is normal, the session
+    /// stays healthy and the caller should skip that device, not tear down.
+    ///
+    /// Phase tagging convention (see callsites in this module):
+    ///   "hello", "init", "topology", "logon" → session-level handshake
+    ///       phases. Silence/parse error here means the session never came
+    ///       up or got knocked off — fatal.
+    ///   "query", "event-log" → per-device data fetch phases. Silence here
+    ///       means the addressed inverter didn't reply to its individual
+    ///       request; the session is still alive for other devices.
+    pub fn is_session_fatal(&self) -> bool {
+        match self {
+            // Socket / OS-level errors from the bluez transport layer:
+            // BrokenPipe, EHOSTDOWN, EHOSTUNREACH. Session is dead.
+            SessionError::Transport(_) => true,
+            // Frame parse error mid-session means we can't trust further
+            // bytes on this socket — the wire is desynced.
+            SessionError::Parse(_) => true,
+            // Logon-level errors — handshake itself failed.
+            SessionError::LogonFailed { .. } => true,
+            SessionError::FirmwareTooOld { .. } => true,
+            // Protocol-shape errors are session-fatal during handshake
+            // phases, per-device only during query / event-log.
+            SessionError::Protocol { phase } => !matches!(*phase, "query" | "event-log"),
+            // Same discrimination for Silent (= recv timeout).
+            SessionError::Silent { phase } => !matches!(*phase, "query" | "event-log"),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, SessionError>;
 
 /// Parsed L2 reply for caller consumption.
@@ -798,3 +833,87 @@ fn current_epoch_u32() -> u32 {
 // referenced from this module (it's consumed via protocol-internal constants).
 #[allow(dead_code)]
 const _KEEP_IMPORTS: u16 = APP_SUSY_ID;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bluez_transport::TransportError;
+
+    #[test]
+    fn silent_during_query_phase_is_per_device_not_fatal() {
+        let e = SessionError::Silent { phase: "query" };
+        assert!(
+            !e.is_session_fatal(),
+            "Silent during query is one device not replying — session stays alive"
+        );
+    }
+
+    #[test]
+    fn silent_during_event_log_phase_is_per_device_not_fatal() {
+        let e = SessionError::Silent { phase: "event-log" };
+        assert!(!e.is_session_fatal());
+    }
+
+    #[test]
+    fn silent_during_handshake_phases_is_session_fatal() {
+        for phase in ["hello", "init", "topology", "logon"] {
+            let e = SessionError::Silent { phase };
+            assert!(
+                e.is_session_fatal(),
+                "Silent during {phase} means handshake never completed"
+            );
+        }
+    }
+
+    #[test]
+    fn protocol_during_query_phase_is_per_device_not_fatal() {
+        let e = SessionError::Protocol { phase: "query" };
+        assert!(!e.is_session_fatal());
+    }
+
+    #[test]
+    fn protocol_during_handshake_phases_is_session_fatal() {
+        for phase in ["hello", "init", "topology", "logon"] {
+            let e = SessionError::Protocol { phase };
+            assert!(e.is_session_fatal(), "phase {phase} should be fatal");
+        }
+    }
+
+    #[test]
+    fn logon_failed_is_session_fatal() {
+        let e = SessionError::LogonFailed { code: 0x0001 };
+        assert!(e.is_session_fatal());
+    }
+
+    #[test]
+    fn firmware_too_old_is_session_fatal() {
+        let e = SessionError::FirmwareTooOld { version: 1 };
+        assert!(e.is_session_fatal());
+    }
+
+    #[test]
+    fn transport_io_error_is_session_fatal() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "EHOSTDOWN");
+        let e = SessionError::Transport(TransportError::Io(io_err));
+        assert!(
+            e.is_session_fatal(),
+            "transport-level errors mean the BT socket itself is unusable"
+        );
+    }
+
+    #[test]
+    fn transport_timeout_at_session_level_is_fatal() {
+        let e = SessionError::Transport(TransportError::Timeout { timeout_ms: 15000 });
+        assert!(e.is_session_fatal());
+    }
+
+    #[test]
+    fn parse_error_is_session_fatal() {
+        // ParseError is constructed from sma-bt-protocol; we can fabricate
+        // one via a too-short frame.
+        let bytes = vec![0x7E, 0xFF, 0x03];
+        let parse_err = sma_bt_protocol::frame::Frame::parse(&bytes).unwrap_err();
+        let e = SessionError::Parse(parse_err);
+        assert!(e.is_session_fatal());
+    }
+}
